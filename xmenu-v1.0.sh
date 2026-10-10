@@ -1,4 +1,13 @@
 #!/bin/sh
+# Xmenu v1.0 — одноразовая установка из SSH.
+# Скопируй весь файл и вставь в командную строку SSH роутера.
+# Сохраняет текущий /opt/bin/xmenu, проверяет скрипт, заменяет его атомарно и запускает.
+(
+set -eu
+umask 077
+mkdir -p /opt/tmp /opt/bin
+cat > /opt/tmp/xmenu-v1.0.sh <<'XMENU_V1_RELEASE_SCRIPT_20261010_EOF'
+#!/bin/sh
 # Xmenu ◆ v1.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
 APP_VERSION="1.0"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
@@ -3117,4 +3126,32 @@ main() {
     done
 }
 main "$@"
-
+XMENU_V1_RELEASE_SCRIPT_20261010_EOF
+chmod 700 /opt/tmp/xmenu-v1.0.sh
+if ! sh -n /opt/tmp/xmenu-v1.0.sh; then
+    echo 'ОШИБКА: проверка sh не пройдена; установленное меню не изменено.' >&2
+    exit 1
+fi
+if command -v dash >/dev/null 2>&1 && ! dash -n /opt/tmp/xmenu-v1.0.sh; then
+    echo 'ОШИБКА: проверка dash не пройдена; установленное меню не изменено.' >&2
+    exit 1
+fi
+if command -v busybox >/dev/null 2>&1 && ! busybox ash -n /opt/tmp/xmenu-v1.0.sh; then
+    echo 'ОШИБКА: проверка BusyBox ash не пройдена; установленное меню не изменено.' >&2
+    exit 1
+fi
+stamp=$(date '+%Y%m%d-%H%M%S')
+if [ -f /opt/bin/xmenu ]; then
+    cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$stamp"
+fi
+new_file="/opt/bin/xmenu.new.$$"
+cp /opt/tmp/xmenu-v1.0.sh "$new_file"
+chmod 700 "$new_file"
+if ! sh -n "$new_file"; then
+    rm -f "$new_file"
+    echo 'ОШИБКА: итоговая проверка не пройдена; установленное меню не изменено.' >&2
+    exit 1
+fi
+mv -f "$new_file" /opt/bin/xmenu
+sh /opt/bin/xmenu
+)
