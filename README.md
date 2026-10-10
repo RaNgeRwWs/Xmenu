@@ -40,6 +40,12 @@ Xmenu получает модель роутера и название/верс�
 3. `uname -m` — последний fallback; значения `mips*` от `uname` не используются, так как на части Keenetic они могут быть неточными.
 
 ## Установка одной командой из SHH:
+opkg update && opkg install curl libnghttp2 && curl -fLsS --retry 3 https://raw.githubusercontent.com/RaNgeRwWs/Xmenu/main/xmenu-v1.0.sh -o /tmp/xmenu-v1.0.sh && sh -n /tmp/xmenu-v1.0.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu-v1.0.sh /opt/bin/xmenu && chmod +x /opt/bin/xmenu && sh /opt/bin/xmenu
+
+После первого запуска для быстрого старта:
+
+xmenu
+
 
 ## Источники проектов:
 
