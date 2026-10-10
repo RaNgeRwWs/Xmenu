@@ -19,7 +19,7 @@
 Подключитесь к роутеру через SSH под `root` и вставьте команду целиком. Она загрузит Xmenu из репозитория, проверит файл, сохранит старую версию и сразу откроет меню.
 
 ```sh
-opkg update >/dev/null 2>&1 && opkg install curl ca-certificates >/dev/null 2>&1 && curl -fLsS --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
+mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
 ```
 
 Установщик не заменит действующий файл, если загрузка или проверка не пройдут. Меню запускается как дочерний процесс, без `exec`, поэтому после выхода из Xmenu интерактивная SSH-оболочка должна остаться доступной.
