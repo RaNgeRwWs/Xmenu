@@ -8,6 +8,7 @@ BACKUP_DIR="$ROOT_DIR/backups"
 CACHE_DIR="/opt/etc/nfqws-menu/strategies"
 LANG_FILE="$ROOT_DIR/language"
 NF_REPO="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main"
+XMENU_UPDATE_URL="https://raw.githubusercontent.com/RaNgeRwWs/Xmenu/main/xmenu-v1.0.sh"
 XKEEN_INSTALLER="https://raw.githubusercontent.com/jameszeroX/XKeen/main/install.sh"
 XKEEN_UI_INSTALLER="https://raw.githubusercontent.com/zxc-rv/XKeen-UI/main/setup.sh"
 NFQWS2_UI_INSTALLER="https://github.com/zemidala/nfqws2-ui/releases/latest/download/install.sh"
@@ -2350,6 +2351,49 @@ update_nfmenu_script() {
     return 0
 }
 
+
+# Обновляет только Xmenu из собственного GitHub-репозитория.
+# Сначала загружает во временный файл, проверяет источник/размер/синтаксис,
+# затем сохраняет текущую версию и атомарно заменяет /opt/bin/xmenu.
+update_xmenu_script() {
+    ensure_network || return 1
+    _ux_target='/opt/bin/xmenu'
+    _ux_tmp="/opt/bin/.xmenu-update.$$"
+    rm -f "$_ux_tmp"
+    say 'Проверяю обновление Xmenu на GitHub...'
+    if ! fetch "$XMENU_UPDATE_URL" "$_ux_tmp" 180; then
+        rm -f "$_ux_tmp"
+        say "${RED}Не удалось скачать обновление Xmenu. Установленная версия не изменена.${RESET}"
+        return 1
+    fi
+    _ux_size=$(wc -c < "$_ux_tmp" 2>/dev/null | tr -d ' ')
+    case "$_ux_size" in ''|*[!0-9]*) _ux_size=0 ;; esac
+    if [ "$_ux_size" -lt 50000 ] ||
+       [ "$(head -n 1 "$_ux_tmp" 2>/dev/null | tr -d '\r')" != '#!/bin/sh' ] ||
+       ! grep -q '^APP_VERSION=' "$_ux_tmp" ||
+       ! grep -q '^XMENU_UPDATE_URL=' "$_ux_tmp" ||
+       ! grep -q '^update_xmenu_script()' "$_ux_tmp" ||
+       ! grep -q '^render_menu()' "$_ux_tmp" ||
+       ! grep -q '^main "\$@"' "$_ux_tmp" ||
+       ! grep -Eq "menu_item 23 '(Обновить Xmenu с GitHub|Update Xmenu from GitHub)'" "$_ux_tmp" ||
+       ! grep -q '23) update_xmenu_script' "$_ux_tmp" ||
+       head -c 256 "$_ux_tmp" 2>/dev/null | grep -qiE '<html|404: Not Found|Bad Gateway|Not Found' ||
+       ! sh -n "$_ux_tmp"; then
+        rm -f "$_ux_tmp"
+        say "${RED}Проверка обновления не пройдена. Установленная версия не изменена.${RESET}"
+        return 1
+    fi
+    if [ -f "$_ux_target" ]; then
+        backup_file "$_ux_target" || { rm -f "$_ux_tmp"; say "${RED}Не удалось сохранить резервную копию Xmenu.${RESET}"; return 1; }
+    fi
+    chmod 700 "$_ux_tmp" || { rm -f "$_ux_tmp"; return 1; }
+    mv -f "$_ux_tmp" "$_ux_target" || { rm -f "$_ux_tmp"; return 1; }
+    chmod 700 "$_ux_target" 2>/dev/null || :
+    say "${GREEN}Xmenu обновлён. Перезапускаю меню...${RESET}"
+    cleanup
+    exec "$_ux_target"
+}
+
 change_ui_language() {
     _lang_now=$(get_ui_lang)
     if [ "$_lang_now" = en ]; then set_ui_lang ru; else set_ui_lang en; fi
@@ -2601,6 +2645,7 @@ render_menu() {
         say "${PURPLE}[::]  Package removal:${RESET}"
         menu_item 21 'Remove components'
         menu_item 22 'Remove Xmenu'
+        menu_item 23 'Update Xmenu from GitHub'
         menu_item 0  'Exit'
         _prompt='[?] Select an option [Enter = exit]: '
     else
@@ -2635,6 +2680,7 @@ render_menu() {
         say "${PURPLE}[::]  Удаление пакетов:${RESET}"
         menu_item 21 'Удаление компонентов'
         menu_item 22 'Удалить Xmenu'
+        menu_item 23 'Обновить Xmenu с GitHub'
         menu_item 0  'Выход'
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
@@ -3014,17 +3060,7 @@ main() {
         backup) backup_configs; return $? ;;
         *) : ;;
     esac
-    # При первом запуске запускаем только запрошенную первичную установку.
-    if [ ! -f "$ROOT_DIR/first-run-complete" ] && [ ! -f "$ROOT_DIR/first-run-attempted" ]; then
-        say "${PURPLE}Первый запуск Xmenu v$APP_VERSION${RESET}"
-        say "${YELLOW}Установка сторонних компонентов и автонастройка XKeen могут изменить маршрутизацию и оборвать SSH-сессию. Убедись, что есть альтернативный доступ к роутеру.${RESET}"
-        if confirm 'Выполнить первичную установку отсутствующих компонентов сейчас?'; then
-            install_all_missing
-        else
-            : > "$ROOT_DIR/first-run-attempted"
-            say "${MUTED}Первичная установка отложена. Запускай компоненты вручную из меню.${RESET}"
-        fi
-    fi
+    # Первое открытие не запускает установку компонентов и не показывает предупреждений.
     while :; do
         render_menu
         INTERRUPTED=0
@@ -3074,9 +3110,11 @@ main() {
             20) change_ui_language; pause ;;
             21) remove_components_menu ;;
             22) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
+            23) update_xmenu_script || pause ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
     done
 }
 main "$@"
+
