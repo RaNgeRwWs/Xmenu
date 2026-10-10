@@ -1,13 +1,4 @@
 #!/bin/sh
-# Xmenu v1.0 — одноразовая установка из SSH.
-# Скопируй весь файл и вставь в командную строку SSH роутера.
-# Сохраняет текущий /opt/bin/xmenu, проверяет скрипт, заменяет его атомарно и запускает.
-(
-set -eu
-umask 077
-mkdir -p /opt/tmp /opt/bin
-cat > /opt/tmp/xmenu-v1.0.sh <<'XMENU_V1_RELEASE_SCRIPT_20261010_EOF'
-#!/bin/sh
 # Xmenu ◆ v1.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
 APP_VERSION="1.0"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
@@ -17,7 +8,7 @@ BACKUP_DIR="$ROOT_DIR/backups"
 CACHE_DIR="/opt/etc/nfqws-menu/strategies"
 LANG_FILE="$ROOT_DIR/language"
 NF_REPO="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main"
-XMENU_UPDATE_URL="https://raw.githubusercontent.com/RaNgeRwWs/Xmenu/main/xmenu-v1.0.sh"
+XMENU_UPDATE_URL="https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh"
 XKEEN_INSTALLER="https://raw.githubusercontent.com/jameszeroX/XKeen/main/install.sh"
 XKEEN_UI_INSTALLER="https://raw.githubusercontent.com/zxc-rv/XKeen-UI/main/setup.sh"
 NFQWS2_UI_INSTALLER="https://github.com/zemidala/nfqws2-ui/releases/latest/download/install.sh"
@@ -273,8 +264,25 @@ drain_stdin() {
     return 0
 }
 
-is_installed() { opkg list-installed 2>/dev/null | awk -v p="$1" '$1==p{f=1} END{exit(f?0:1)}'; }
-pkg_version() { opkg status "$1" 2>/dev/null | sed -n 's/^Version:[[:space:]]*//p' | head -n 1; }
+# During menu rendering, one opkg snapshot avoids spawning `opkg` repeatedly for every row.
+# Outside rendering the original live lookup is retained so install/remove actions see fresh state.
+_OPKG_RENDER_CACHE_FILE=''
+is_installed() {
+    _ip_pkg=$1
+    if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ] && [ -r "$_OPKG_RENDER_CACHE_FILE" ]; then
+        awk -v p="$_ip_pkg" '$1==p && $2=="-" {f=1} END{exit(f?0:1)}' "$_OPKG_RENDER_CACHE_FILE"
+    else
+        opkg list-installed 2>/dev/null | awk -v p="$_ip_pkg" '$1==p{f=1} END{exit(f?0:1)}'
+    fi
+}
+pkg_version() {
+    _pv_pkg=$1
+    if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ] && [ -r "$_OPKG_RENDER_CACHE_FILE" ]; then
+        awk -v p="$_pv_pkg" '$1==p {if ($2=="-") print $3; else if ($2!="") print $2; exit}' "$_OPKG_RENDER_CACHE_FILE"
+    else
+        opkg status "$_pv_pkg" 2>/dev/null | sed -n 's/^Version:[[:space:]]*//p' | head -n 1
+    fi
+}
 
 _TRANSPORT_TLS_CACHED=''
 transport_has_tls() {
@@ -467,10 +475,13 @@ get_arch() {
 }
 rci_json() {
     _rci=''
-    if command -v curl >/dev/null 2>&1 && [ -x "$(command -v curl 2>/dev/null)" ]; then
-        _rci=$(curl -fLsS --connect-timeout 2 --max-time 3 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
+    # This is a local API call. Keep the UI responsive if the API is disabled;
+    # do not spend another timeout trying the same endpoint with a second client.
+    if command -v curl >/dev/null 2>&1; then
+        _rci=$(curl -fLsS --connect-timeout 1 --max-time 2 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
+    elif command -v wget >/dev/null 2>&1; then
+        _rci=$(wget -qO- -T 2 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
     fi
-    if [ -z "$_rci" ] && command -v wget >/dev/null 2>&1; then _rci=$(wget -qO- -T 3 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''; fi
     [ -n "$_rci" ] && printf '%s\n' "$_rci"
 }
 _json_value() {
@@ -1984,14 +1995,14 @@ get_xkeen_version() {
         _v=$(read_version_file /opt/etc/xkeen/version /opt/etc/xkeen/version.txt 2>/dev/null || printf '')
     fi
     if [ -z "$_v" ]; then
-        _v=$(opkg list-installed 2>/dev/null | awk '$1=="xkeen" {print $3; exit}')
+        _v=$(pkg_version xkeen)
     fi
     printf '%s' "${_v:-неизвестна}"
 }
 
 get_xkeen_ui_zxc_version() {
     xkeen_ui_zxc_is_installed || { printf '%s' 'не установлен'; return 0; }
-    _v=$(opkg list-installed 2>/dev/null | awk '$1=="xkeen-ui" {print $3; exit}')
+    _v=$(pkg_version xkeen-ui)
     if [ -z "$_v" ]; then
         _v=$(read_version_file /opt/etc/xkeen-ui/version /opt/etc/xkeen-ui/version.txt 2>/dev/null || printf '')
     fi
@@ -2076,7 +2087,12 @@ component_table_header() {
 
 render_component_statuses() {
     _COMPONENT_INSTALLED_FILE="$ROOT_DIR/.components-installed.$$"
+    _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$$"
     : > "$_COMPONENT_INSTALLED_FILE" || return 1
+    if ! opkg list-installed > "$_OPKG_RENDER_CACHE_FILE" 2>/dev/null; then
+        rm -f "$_OPKG_RENDER_CACHE_FILE"
+        _OPKG_RENDER_CACHE_FILE=''
+    fi
 
     # Собираем и показываем только установленные компоненты.
     print_component 'nfqws-keenetic' "$(is_installed nfqws-keenetic && printf yes || printf no)" "$(pkg_version nfqws-keenetic)"
@@ -2156,6 +2172,8 @@ render_component_statuses() {
         if [ "$(get_ui_lang)" = en ]; then say "  ${YELLOW}No managed components installed yet.${RESET}"; else say "  ${YELLOW}Управляемые компоненты пока не установлены.${RESET}"; fi
     fi
     rm -f "$_COMPONENT_INSTALLED_FILE"
+    [ -z "${_OPKG_RENDER_CACHE_FILE:-}" ] || rm -f "$_OPKG_RENDER_CACHE_FILE"
+    _OPKG_RENDER_CACHE_FILE=''
 }
 
 show_status() {
@@ -2583,7 +2601,15 @@ xmenu_service_menu() {
 render_menu() {
     [ -t 1 ] && printf '\033[2J\033[H'
     _lang=$(get_ui_lang)
-    _r=$(get_router); _model=${_r%%|*}; _fw=${_r#*|}; _arch=$(get_arch)
+    # Router model, firmware and Entware architecture do not change during one menu session.
+    # Query once, then reuse the values when returning from a submenu/action.
+    if [ "${_XMENU_DEVICE_CACHE_READY:-0}" != 1 ]; then
+        _XMENU_DEVICE_INFO_CACHE=$(get_router)
+        _XMENU_ARCH_CACHE=$(get_arch)
+        _XMENU_DEVICE_CACHE_READY=1
+    fi
+    _r=$_XMENU_DEVICE_INFO_CACHE
+    _model=${_r%%|*}; _fw=${_r#*|}; _arch=$_XMENU_ARCH_CACHE
     # Одна строка заголовка без дополнительных рамок. Длину считаем в
     # видимых UTF-8 символах, а не в байтах (◆ занимает один столбец).
     _title="Xmenu ◆ v$APP_VERSION"
@@ -3126,32 +3152,3 @@ main() {
     done
 }
 main "$@"
-XMENU_V1_RELEASE_SCRIPT_20261010_EOF
-chmod 700 /opt/tmp/xmenu-v1.0.sh
-if ! sh -n /opt/tmp/xmenu-v1.0.sh; then
-    echo 'ОШИБКА: проверка sh не пройдена; установленное меню не изменено.' >&2
-    exit 1
-fi
-if command -v dash >/dev/null 2>&1 && ! dash -n /opt/tmp/xmenu-v1.0.sh; then
-    echo 'ОШИБКА: проверка dash не пройдена; установленное меню не изменено.' >&2
-    exit 1
-fi
-if command -v busybox >/dev/null 2>&1 && ! busybox ash -n /opt/tmp/xmenu-v1.0.sh; then
-    echo 'ОШИБКА: проверка BusyBox ash не пройдена; установленное меню не изменено.' >&2
-    exit 1
-fi
-stamp=$(date '+%Y%m%d-%H%M%S')
-if [ -f /opt/bin/xmenu ]; then
-    cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$stamp"
-fi
-new_file="/opt/bin/xmenu.new.$$"
-cp /opt/tmp/xmenu-v1.0.sh "$new_file"
-chmod 700 "$new_file"
-if ! sh -n "$new_file"; then
-    rm -f "$new_file"
-    echo 'ОШИБКА: итоговая проверка не пройдена; установленное меню не изменено.' >&2
-    exit 1
-fi
-mv -f "$new_file" /opt/bin/xmenu
-sh /opt/bin/xmenu
-)
