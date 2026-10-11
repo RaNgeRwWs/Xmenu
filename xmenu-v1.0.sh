@@ -1636,13 +1636,76 @@ update_blobs_for() {
     [ "$_ub_failed" -eq 0 ]
 }
 
+# Удаляет только битую ссылку на необязательный rkn.list.
+# rkn.list устанавливается отдельным действием; он не должен становиться
+# обязательной зависимостью кастомной стратегии, если самого файла нет.
+drop_missing_rkn_reference() {
+    _dmr_conf=$1
+    _dmr_ver=$2
+    case "$_dmr_ver" in
+        2) _dmr_list='/opt/etc/nfqws2/lists/rkn.list'
+           _dmr_path_esc='/opt/etc/nfqws2/lists/rkn\\.list' ;;
+        1) _dmr_list='/opt/etc/nfqws/rkn.list'
+           _dmr_path_esc='/opt/etc/nfqws/rkn\\.list' ;;
+        *) return 0 ;;
+    esac
+    [ -s "$_dmr_list" ] && return 0
+    _dmr_host="--hostlist=$_dmr_list"
+    grep -Fq -- "$_dmr_host" "$_dmr_conf" 2>/dev/null || return 0
+
+    # Never modify a config through a symlink.
+    if [ -L "$_dmr_conf" ]; then
+        say "${YELLOW}rkn.list отсутствует, а конфиг является симлинком; ссылку на необязательный список не меняю автоматически.${RESET}"
+        return 0
+    fi
+
+    _dmr_tmp="${_dmr_conf}.rkn-clean.$"
+    _dmr_out="${_dmr_tmp}.out"
+    rm -f "$_dmr_tmp" "$_dmr_out"
+    cp -p "$_dmr_conf" "$_dmr_tmp" || { rm -f "$_dmr_tmp"; return 1; }
+    sed "s|[[:space:]]*--hostlist=$_dmr_path_esc||g" "$_dmr_tmp" > "$_dmr_out" || {
+        rm -f "$_dmr_tmp" "$_dmr_out"
+        return 1
+    }
+    cat "$_dmr_out" > "$_dmr_tmp" || {
+        rm -f "$_dmr_tmp" "$_dmr_out"
+        return 1
+    }
+    rm -f "$_dmr_out"
+    if command -v cmp >/dev/null 2>&1 && cmp -s "$_dmr_conf" "$_dmr_tmp"; then
+        rm -f "$_dmr_tmp"
+        return 0
+    fi
+
+    # Back up only the live NFQWS config; temporary strategy files are staged
+    # copies and will be installed by their caller after all checks succeed.
+    case "$_dmr_conf" in
+        /opt/etc/nfqws2/nfqws2.conf|/opt/etc/nfqws/nfqws.conf)
+            backup_file "$_dmr_conf" || { rm -f "$_dmr_tmp"; return 1; }
+            ;;
+    esac
+    if ! mv -f "$_dmr_tmp" "$_dmr_conf"; then
+        rm -f "$_dmr_tmp"
+        return 1
+    fi
+    RKN_REFERENCE_REMOVED=1
+    say "${YELLOW}rkn.list не найден: удалена только ссылка на него из конфига. Стратегия продолжит работу без этого необязательного списка; остальные параметры сохранены.${RESET}"
+    return 0
+}
+
 # Проверяет списки .list, на которые ссылается конфигурация, и скачивает отсутствующие.
 # Источник и логика соответствуют nfqws-menu: strategies/lists/<имя>.
 update_lists_for() {
     _ul_conf=$1
     _ul_ver=$2
     LISTS_CHANGED=0
+    RKN_REFERENCE_REMOVED=0
     [ -f "$_ul_conf" ] || { say "Конфиг списков не найден: $_ul_conf"; return 1; }
+    drop_missing_rkn_reference "$_ul_conf" "$_ul_ver" || {
+        say "${RED}Не удалось безопасно обработать отсутствующий rkn.list; конфиг списков не изменён.${RESET}"
+        return 1
+    }
+    [ "${RKN_REFERENCE_REMOVED:-0}" = 1 ] && LISTS_CHANGED=1
     case "$_ul_ver" in
         2) _ul_base='/opt/etc/nfqws2/lists' ;;
         1) _ul_base='/opt/etc/nfqws/lists' ;;
@@ -2043,6 +2106,9 @@ preserve_rkn_hostlist() {
         1) _pr_list='/opt/etc/nfqws/rkn.list' ;;
         *) return 0 ;;
     esac
+    # Preserve an existing opt-in only when the optional file is still present.
+    # A stale MODE_LIST argument must not make the replacement strategy unstartable.
+    [ -s "$_pr_list" ] || return 0
     mode_list_has_host "$_pr_old" "--hostlist=$_pr_list" || return 0
     mode_list_has_host "$_pr_new" "--hostlist=$_pr_list" && return 0
     _pr_tmp="$_pr_new.rkn.$$"
