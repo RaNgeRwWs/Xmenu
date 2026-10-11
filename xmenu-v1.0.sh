@@ -950,10 +950,11 @@ ensure_geoipset_cron() {
     _GIP_CRON_CURRENT="$ROOT_DIR/crontab-geoipset-current.$$"
     _GIP_CRON_NEXT="$ROOT_DIR/crontab-geoipset-next.$$"
     crontab -l > "$_GIP_CRON_CURRENT" 2>/dev/null || : > "$_GIP_CRON_CURRENT"
-    # Xmenu owns this schedule: remove its previous entry and any untagged
-    # XKeen GeoFile job so that only the daily 04:30 Xmenu job remains.
-    grep -Fv 'XMENU_GEOIPSET_DAILY_0430' "$_GIP_CRON_CURRENT" |
-        grep -Fv '/opt/sbin/xkeen -ug' > "$_GIP_CRON_NEXT" || :
+    # Replace only the entry managed by Xmenu. Preserve unrelated crontab lines.
+    grep -Fv 'XMENU_GEOIPSET_DAILY_0430' "$_GIP_CRON_CURRENT" > "$_GIP_CRON_NEXT" || :
+    if grep -Fv 'XMENU_GEOIPSET_DAILY_0430' "$_GIP_CRON_CURRENT" | grep -Fq '/opt/sbin/xkeen -ug'; then
+        say "${YELLOW}Найдена другая задача xkeen -ug без метки Xmenu; она сохранена. Проверь crontab на дублирующее расписание GeoIP/GeoIPSet.${RESET}"
+    fi
     printf '%s\n' '30 4 * * * /opt/sbin/xkeen -ug >> /opt/var/log/xkeen-geoipset-update.log 2>&1 # XMENU_GEOIPSET_DAILY_0430' >> "$_GIP_CRON_NEXT" || {
         rm -f "$_GIP_CRON_CURRENT" "$_GIP_CRON_NEXT"
         return 1
