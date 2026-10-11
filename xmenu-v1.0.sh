@@ -3463,7 +3463,7 @@ remove_nfqw2_blobs() {
         return 0
     }
     command -v find >/dev/null 2>&1 || { say "${RED}Команда find не найдена.${RESET}"; return 1; }
-    _rnb_list="$ROOT_DIR/.remove-nfqws2-blobs.$"
+    _rnb_list="$ROOT_DIR/.remove-nfqws2-blobs.$$"
     : > "$_rnb_list" || return 1
     if ! find "$_rnb_dir" -maxdepth 1 -type f -name '*.bin' -print 2>/dev/null > "$_rnb_list"; then
         rm -f "$_rnb_list"
@@ -3506,7 +3506,7 @@ remove_nfqw2_blobs() {
 # Архивы в BACKUP_DIR могут содержать сохранённые конфигурации — показываем их до подтверждения.
 remove_xmenu_backups() {
     command -v find >/dev/null 2>&1 || { say "${RED}Команда find не найдена.${RESET}"; return 1; }
-    _rxb_list="$ROOT_DIR/.remove-xmenu-backups.$"
+    _rxb_list="$ROOT_DIR/.remove-xmenu-backups.$$"
     : > "$_rxb_list" || return 1
     if [ -d /opt/bin ]; then
         find /opt/bin -maxdepth 1 \( -type f -o -type l \) -name 'xmenu.bak*' -print 2>/dev/null >> "$_rxb_list" || {
