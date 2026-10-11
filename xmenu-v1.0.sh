@@ -242,7 +242,15 @@ menu_item() {
     [ -n "$_mi_term_width" ] || _mi_term_width=$(terminal_width)
     _mi_text_width=$((_mi_term_width - 11))
     [ "$_mi_text_width" -ge 20 ] 2>/dev/null || _mi_text_width=20
-    _mi_first_prefix="      $(printf '%2s.  ' "$_mi_number")"
+    # Keep the number's first digit in a fixed column, and keep labels aligned
+    # after the dot for both one- and two-digit choices (including the U hotkey).
+    _mi_first_prefix="      ${_mi_number}."
+    _mi_prefix_spaces=$((11 - ${#_mi_first_prefix}))
+    if [ "$_mi_prefix_spaces" -gt 0 ] 2>/dev/null; then
+        _mi_first_prefix="${_mi_first_prefix}$(printf '%*s' "$_mi_prefix_spaces" '')"
+    else
+        _mi_first_prefix="${_mi_first_prefix} "
+    fi
     # Fast path: most menu labels fit on one line. Avoid starting awk for those.
     _mi_text_length=${#_mi_text}
     if [ "$_mi_text_length" -le "$_mi_text_width" ] 2>/dev/null; then
