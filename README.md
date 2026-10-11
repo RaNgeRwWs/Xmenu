@@ -32,8 +32,7 @@ mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubuse
 **Вариант B — wget, если curl не установлен:**
 
 ```sh
-wget -O /tmp/xmenu.sh \
-  https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
+wget -O /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
 ```
 
 ---
