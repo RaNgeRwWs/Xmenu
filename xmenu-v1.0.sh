@@ -2844,7 +2844,7 @@ update_xmenu_script() {
     say "Проверяю Xmenu v$APP_VERSION и ищу актуальный код на GitHub/зеркалах..."
     _ux_cache_bust=$(date '+%s' 2>/dev/null)
     case "$_ux_cache_bust" in ''|*[!0-9]*) _ux_cache_bust=0 ;; esac
-    _ux_url="${XMENU_UPDATE_URL}?xmenu_refresh=${_ux_cache_bust}_$"
+    _ux_url="${XMENU_UPDATE_URL}?xmenu_refresh=${_ux_cache_bust}"
     if ! xmenu_fetch_file "$_ux_url" "$_ux_tmp" 15; then
         rm -f "$_ux_tmp"
         say "${RED}Не удалось скачать обновление Xmenu через GitHub и зеркала. Текущая версия не изменена.${RESET}"
