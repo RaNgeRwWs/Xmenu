@@ -3455,6 +3455,105 @@ remove_component_backups() {
     [ "$_rb_failed" -eq 0 ]
 }
 
+# Удаляет только файлы blobs (*.bin) из каталога NFQWS2; пакет и конфиги не затрагиваются.
+remove_nfqw2_blobs() {
+    _rnb_dir='/opt/etc/nfqws2/blobs'
+    [ -d "$_rnb_dir" ] || {
+        say "Каталог $_rnb_dir не найден; blobs удалять нечего."
+        return 0
+    }
+    command -v find >/dev/null 2>&1 || { say "${RED}Команда find не найдена.${RESET}"; return 1; }
+    _rnb_list="$ROOT_DIR/.remove-nfqws2-blobs.$"
+    : > "$_rnb_list" || return 1
+    if ! find "$_rnb_dir" -maxdepth 1 -type f -name '*.bin' -print 2>/dev/null > "$_rnb_list"; then
+        rm -f "$_rnb_list"
+        say "${RED}Не удалось просканировать $_rnb_dir; файлы не удалены.${RESET}"
+        return 1
+    fi
+    if [ ! -s "$_rnb_list" ]; then
+        rm -f "$_rnb_list"
+        say 'Файлы blobs (*.bin) не найдены.'
+        return 0
+    fi
+    _rnb_count=$(wc -l < "$_rnb_list" | tr -d ' ')
+    say "Найдено blobs для удаления: $_rnb_count"
+    while IFS= read -r _rnb_file || [ -n "$_rnb_file" ]; do
+        [ -n "$_rnb_file" ] && printf '  %s\n' "$_rnb_file"
+    done < "$_rnb_list"
+    if [ "$(get_ui_lang)" = en ]; then
+        _rnb_prompt='Delete all *.bin files from /opt/etc/nfqws2/blobs? The nfqws2 package and configs will remain.'
+    else
+        _rnb_prompt='Удалить все файлы *.bin из /opt/etc/nfqws2/blobs? Пакет nfqws2 и конфигурации останутся.'
+    fi
+    confirm_no "$_rnb_prompt" || { rm -f "$_rnb_list"; say 'Удаление отменено.'; return 1; }
+    _rnb_removed=0
+    _rnb_failed=0
+    while IFS= read -r _rnb_file || [ -n "$_rnb_file" ]; do
+        [ -n "$_rnb_file" ] || continue
+        if rm -f "$_rnb_file" 2>/dev/null; then
+            _rnb_removed=$((_rnb_removed + 1))
+        else
+            _rnb_failed=$((_rnb_failed + 1))
+            say "${RED}Не удалось удалить: $_rnb_file${RESET}"
+        fi
+    done < "$_rnb_list"
+    rm -f "$_rnb_list"
+    say "Удалено blobs: $_rnb_removed из $_rnb_count."
+    [ "$_rnb_failed" -eq 0 ]
+}
+
+# Удаляет резервные копии Xmenu, не затрагивая действующий /opt/bin/xmenu.
+# Архивы в BACKUP_DIR могут содержать сохранённые конфигурации — показываем их до подтверждения.
+remove_xmenu_backups() {
+    command -v find >/dev/null 2>&1 || { say "${RED}Команда find не найдена.${RESET}"; return 1; }
+    _rxb_list="$ROOT_DIR/.remove-xmenu-backups.$"
+    : > "$_rxb_list" || return 1
+    if [ -d /opt/bin ]; then
+        find /opt/bin -maxdepth 1 \( -type f -o -type l \) -name 'xmenu.bak*' -print 2>/dev/null >> "$_rxb_list" || {
+            rm -f "$_rxb_list"
+            say "${RED}Не удалось просканировать /opt/bin; бэкапы не удалены.${RESET}"
+            return 1
+        }
+    fi
+    if [ -d "$BACKUP_DIR" ]; then
+        find "$BACKUP_DIR" \( -type f -o -type l \) -print 2>/dev/null >> "$_rxb_list" || {
+            rm -f "$_rxb_list"
+            say "${RED}Не удалось просканировать $BACKUP_DIR; бэкапы не удалены.${RESET}"
+            return 1
+        }
+    fi
+    if [ ! -s "$_rxb_list" ]; then
+        rm -f "$_rxb_list"
+        say 'Резервные копии Xmenu не найдены.'
+        return 0
+    fi
+    _rxb_count=$(wc -l < "$_rxb_list" | tr -d ' ')
+    say "Найдено файлов резервных копий Xmenu: $_rxb_count"
+    while IFS= read -r _rxb_file || [ -n "$_rxb_file" ]; do
+        [ -n "$_rxb_file" ] && printf '  %s\n' "$_rxb_file"
+    done < "$_rxb_list"
+    if [ "$(get_ui_lang)" = en ]; then
+        _rxb_prompt='Delete all Xmenu backups, including saved config backups in /opt/etc/xkeen-menu/backups? The active /opt/bin/xmenu will remain.'
+    else
+        _rxb_prompt='Удалить все бэкапы Xmenu, включая копии конфигураций в /opt/etc/xkeen-menu/backups? Действующий /opt/bin/xmenu останется.'
+    fi
+    confirm_no "$_rxb_prompt" || { rm -f "$_rxb_list"; say 'Удаление отменено.'; return 1; }
+    _rxb_failed=0
+    if [ -d /opt/bin ]; then
+        find /opt/bin -maxdepth 1 \( -type f -o -type l \) -name 'xmenu.bak*' -exec rm -f {} \; || _rxb_failed=1
+    fi
+    if [ -d "$BACKUP_DIR" ]; then
+        rm -rf "$BACKUP_DIR" || _rxb_failed=1
+    fi
+    rm -f "$_rxb_list"
+    if [ "$_rxb_failed" -eq 0 ]; then
+        say 'Резервные копии Xmenu удалены; действующий /opt/bin/xmenu сохранён.'
+    else
+        say "${RED}Не удалось удалить часть резервных копий Xmenu. Проверь права и остатки файлов.${RESET}"
+    fi
+    return "$_rxb_failed"
+}
+
 # Подменю показывает только реально обнаруженные компоненты Xmenu.
 remove_components_menu() {
     while :; do
@@ -3522,14 +3621,20 @@ remove_components_menu() {
         # Все действия имеют числовые номера, выдаваемые после списка компонентов.
         _rm_all_idx=$((_rm_idx + 1))
         _rm_backup_idx=$((_rm_idx + 2))
+        _rm_blobs_idx=$((_rm_idx + 3))
+        _rm_xmenu_backup_idx=$((_rm_idx + 4))
         if [ "$_rm_lang" = en ]; then
             menu_item "$_rm_all_idx" 'Remove all NFQWS packages'
             menu_item "$_rm_backup_idx" 'Remove backup files (*.bak, *.bak.* / *-opkg)'
+            menu_item "$_rm_blobs_idx" 'Remove all NFQWS2 blobs (*.bin)'
+            menu_item "$_rm_xmenu_backup_idx" 'Remove all Xmenu backups (including config backups)'
             menu_item 0 'Back'
             _rm_prompt='Choose a number [0 = back]: '
         else
             menu_item "$_rm_all_idx" 'Удалить все пакеты NFQWS'
             menu_item "$_rm_backup_idx" 'Удалить резервные копии (*.bak, *.bak.* / *-opkg)'
+            menu_item "$_rm_blobs_idx" 'Удалить все blobs NFQWS2 (*.bin)'
+            menu_item "$_rm_xmenu_backup_idx" 'Удалить все бэкапы Xmenu (включая бэкапы конфигураций)'
             menu_item 0 'Назад'
             _rm_prompt='Что удалить? Ваш выбор [0 = назад]: '
         fi
@@ -3551,6 +3656,8 @@ remove_components_menu() {
             0) rm -f "$_REMOVE_MENU_FILE"; return 0 ;;
             "$_rm_all_idx") remove_all_nf_components ;;
             "$_rm_backup_idx") remove_component_backups ;;
+            "$_rm_blobs_idx") remove_nfqw2_blobs ;;
+            "$_rm_xmenu_backup_idx") remove_xmenu_backups ;;
             *)
                 _rm_code=$(sed -n "${_rm_choice}p" "$_REMOVE_MENU_FILE" 2>/dev/null | cut -f1)
                 case "$_rm_code" in
