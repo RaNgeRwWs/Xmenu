@@ -2925,7 +2925,7 @@ xmenu_cached_nfmenu_remote_version() {
 
 xmenu_update_check_worker() {
     _xuw_parent=$1
-    _xuw_tmp="$ROOT_DIR/.xmenu-update-cache.tmp"
+    _xuw_tmp="$ROOT_DIR/xmenu-update-cache.tmp"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
     _xuw_nfmenu_version=$(xmenu_nfmenu_remote_version_probe 2>/dev/null) || _xuw_nfmenu_version=unknown
     {
