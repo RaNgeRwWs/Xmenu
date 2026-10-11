@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.2.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.2.2"
+# Xmenu ◆ v1.2.3 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.2.3"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -601,11 +601,22 @@ backup_configs() {
         [ -e "$_p" ] && [ ! -L "$_p" ] && set -- "$@" "$_p"
     done
     [ "$#" -gt 0 ] || { say 'Конфигурации для бэкапа не найдены.'; return 0; }
+    _archive_base="$BACKUP_DIR/configs-$_ts"
     if command -v gzip >/dev/null 2>&1; then
-        _archive="$BACKUP_DIR/configs-$_ts.tar.gz"
+        _archive_ext='.tar.gz'
+    else
+        _archive_ext='.tar'
+    fi
+    _archive="$_archive_base$_archive_ext"
+    _archive_seq=1
+    # Preserve previous archives when backups are made more than once per second.
+    while [ -e "$_archive" ] || [ -L "$_archive" ]; do
+        _archive="$_archive_base.$_archive_seq$_archive_ext"
+        _archive_seq=$((_archive_seq + 1))
+    done
+    if [ "$_archive_ext" = '.tar.gz' ]; then
         tar -czf "$_archive" "$@"
     else
-        _archive="$BACKUP_DIR/configs-$_ts.tar"
         say "${YELLOW}gzip не найден; создаю несжатый tar-архив.${RESET}"
         tar -cf "$_archive" "$@"
     fi
