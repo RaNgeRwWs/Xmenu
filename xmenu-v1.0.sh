@@ -67,7 +67,7 @@ cleanup() {
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
         stop_component_status_refresh
-        rm -f "$ROOT_DIR/.xmenu-update-cache.$" /tmp/xmenu-version-"$" 2>/dev/null || :
+        rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
         for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized "$ROOT_DIR"/install-xkeen-stable-auto."$$" "$ROOT_DIR/.components-installed.$$" "$ROOT_DIR/.opkg-installed.$$"; do
             [ -e "$_cleanup_path" ] || [ -L "$_cleanup_path" ] || continue
             case "$_cleanup_path" in /tmp/xmenu-*|"$ROOT_DIR"/*) rm -rf "$_cleanup_path" 2>/dev/null || : ;; esac
