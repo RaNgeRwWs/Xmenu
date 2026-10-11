@@ -78,26 +78,6 @@ Xmenu **не является самостоятельным VPN-протоко�
 - Не все сторонние компоненты предоставляют одинаковый способ определения версии, поэтому часть сведений в меню статуса может отображаться как неизвестная.
 - Успешная проверка `sh -n` подтверждает только синтаксическую корректность скрипта, но не гарантирует корректную работу установщика или безопасность стороннего кода.
 
-## 🚀 Быстрая установка
-
-Подключитесь к роутеру по SSH под `root`. Команда ниже скачает скрипт, проверит shell-синтаксис, сохранит копию существующего `/opt/bin/xmenu` и запустит меню.
-
-Если в Entware установлен `curl`:
-
-```sh
-mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && grep -q '^APP_VERSION=' /tmp/xmenu.sh && grep -q '^main()' /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
-```
-
-Если `curl` отсутствует, но есть `wget`, скачайте скрипт так:
-
-```sh
-wget -O /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && grep -q '^APP_VERSION=' /tmp/xmenu.sh && grep -q '^main()' /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
-```
-
-При первом запуске из другого пути Xmenu также пытается установить копию самого себя в `/opt/bin/xmenu`, чтобы в дальнейшем его можно было открывать короткой командой.
-
-> **Примечание.** Для последующих обновлений предпочтительно использовать встроенный пункт меню **23 — «Обновить Xmenu с GitHub»**. При повторной ручной установке команда сохраняет прежний скрипт под именем с временной меткой, чтобы не перезаписать файл резервной копии с постоянным именем.
-
 ## ▶️ Запуск и обновление
 
 Открыть меню:
