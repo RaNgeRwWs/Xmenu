@@ -52,7 +52,7 @@ cleanup() {
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
         rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
-        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \\
+        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
             "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* \
             "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* \
             "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized \
@@ -3177,7 +3177,7 @@ run_nfmenu_action() {
         case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
         _rnf_last=$(tr -d '\r' < "$_rnf_src" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
         if [ "$_rnf_size" -ge 50000 ] && grep -q '^SCRIPT_VERSION=' "$_rnf_src" && \
-           grep -q '^main_menu()' "$_rnf_src" && nfmenu_final_main_menu_call "$_rnf_src" && \\
+           grep -q '^main_menu()' "$_rnf_src" && nfmenu_final_main_menu_call "$_rnf_src" && \
            grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_src" && sh -n "$_rnf_src"; then
             _rnf_valid=1
         fi
@@ -3195,7 +3195,7 @@ run_nfmenu_action() {
         _rnf_last=$(tr -d '\r' < "$_rnf_download" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
         if [ "$_rnf_size" -lt 50000 ] || response_looks_like_error_page "$_rnf_download" || \
            ! grep -q '^SCRIPT_VERSION=' "$_rnf_download" || ! grep -q '^main_menu()' "$_rnf_download" || \
-           ! nfmenu_final_main_menu_call "$_rnf_download" || \\
+           ! nfmenu_final_main_menu_call "$_rnf_download" || \
            ! grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_download" || ! sh -n "$_rnf_download"; then
             rm -f "$_rnf_download" "$_rnf_run"
             say "${RED}Проверка источника nfqws-menu не пройдена; выполнение отменено.${RESET}"
