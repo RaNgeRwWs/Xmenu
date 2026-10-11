@@ -3032,6 +3032,7 @@ xmenu_remote_version_probe() {
 
 # Force a network check even when the automatic 10-minute cache is still fresh.
 check_xmenu_update_now() {
+    _cxu_cache_write_failed=0
     _cxu_lang=$(get_ui_lang)
     if [ "$_cxu_lang" = en ]; then
         say "Checking GitHub for an Xmenu update..."
@@ -3096,7 +3097,7 @@ check_xmenu_update_now() {
     return 0
 }
 
-xmenu_update_check_worker() {xmenu_update_check_worker() {
+xmenu_update_check_worker() {
     _xuw_parent=$1
     _xuw_tmp="$ROOT_DIR/xmenu-update-cache.tmp"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
@@ -4214,7 +4215,7 @@ main() {
         INTERRUPTED=0
         MENU_READING=1
         _menu_lang=$(get_ui_lang)
-        if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [Enter = exit]: '; else _prompt='[?] Выберите пункт [Enter = выход]: '; fi
+        if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [U = check updates, Enter = exit]: '; else _prompt='[?] Выберите пункт [U = проверить обновление, Enter = выход]: '; fi
         xmenu_read_menu_prompt "${LAVENDER}$_prompt${RESET}"
         _read_rc=$?
         MENU_READING=0
