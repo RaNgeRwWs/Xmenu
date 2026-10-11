@@ -52,7 +52,7 @@ cleanup() {
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
         rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
-        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$"* "$ROOT_DIR"/.*."$"* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
+        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \\
             "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* \
             "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* \
             "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized \
@@ -1085,7 +1085,7 @@ install_xkeen_core_profile() {
         return "$_profile_rc"
     fi
     say 'Настраиваю GeoIP/GeoIPSet, cron и автозагрузку XKeen...'
-    /opt/sbin/xkeen -i auto cores=none geo=on geoipset=on cron=on autostart=on
+    /opt/sbin/xkeen -i auto cores=none geo=on geoipset=on cron=off autostart=on
     _profile_rc=$?
     cleanup
     if [ "$_profile_rc" -ne 0 ]; then
@@ -2645,6 +2645,45 @@ install_awg_manager() {
     run_nfmenu_action menu_awg_manager
 }
 
+nfmenu_final_main_menu_call() {
+    awk '
+        function is_menu_call(s, t) {
+            t=s
+            sub(/[[:space:]]+#.*/, "", t)
+            sub(/^[[:space:]]+/, "", t)
+            sub(/[[:space:]]+$/, "", t)
+            sub(/;$/, "", t)
+            return t=="main_menu" || t=="main_menu \"$@\"" || t=="main_menu \047$@\047" || t=="main_menu $@"
+        }
+        /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+        { valid=is_menu_call($0) }
+        END { exit(valid ? 0 : 1) }
+    ' "$1"
+}
+
+nfmenu_strip_final_main_menu_call() {
+    awk '
+        function is_menu_call(s, t) {
+            t=s
+            sub(/[[:space:]]+#.*/, "", t)
+            sub(/^[[:space:]]+/, "", t)
+            sub(/[[:space:]]+$/, "", t)
+            sub(/;$/, "", t)
+            return t=="main_menu" || t=="main_menu \"$@\"" || t=="main_menu \047$@\047" || t=="main_menu $@"
+        }
+        {
+            rows[NR]=$0
+            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
+            last_content=NR
+            last_is_menu=is_menu_call($0)
+        }
+        END {
+            if (!last_content || !last_is_menu) exit 1
+            for (i=1; i<=NR; i++) if (i!=last_content) print rows[i]
+        }
+    ' "$1"
+}
+
 update_nfmenu_script() {
     ensure_network || return 1
     _ufn_target='/opt/nfqws-menu.sh'
@@ -2659,7 +2698,7 @@ update_nfmenu_script() {
     case "$_ufn_size" in ''|*[!0-9]*) _ufn_size=0 ;; esac
     if [ "$_ufn_size" -lt 50000 ] || ! grep -q '^SCRIPT_VERSION=' "$_ufn_tmp" ||
        ! grep -q '^main_menu()' "$_ufn_tmp" ||
-       [ "$(tr -d '\r' < "$_ufn_tmp" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')" != 'main_menu' ] ||
+       ! nfmenu_final_main_menu_call "$_ufn_tmp" ||
        response_looks_like_error_page "$_ufn_tmp" || ! sh -n "$_ufn_tmp"; then
         rm -f "$_ufn_tmp"
         say "${RED}Проверка официального nfqws-menu.sh не пройдена; текущий файл не изменён.${RESET}"
@@ -3137,7 +3176,7 @@ run_nfmenu_action() {
         case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
         _rnf_last=$(tr -d '\r' < "$_rnf_src" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
         if [ "$_rnf_size" -ge 50000 ] && grep -q '^SCRIPT_VERSION=' "$_rnf_src" && \
-           grep -q '^main_menu()' "$_rnf_src" && [ "$_rnf_last" = main_menu ] && \
+           grep -q '^main_menu()' "$_rnf_src" && nfmenu_final_main_menu_call "$_rnf_src" && \\
            grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_src" && sh -n "$_rnf_src"; then
             _rnf_valid=1
         fi
@@ -3155,7 +3194,7 @@ run_nfmenu_action() {
         _rnf_last=$(tr -d '\r' < "$_rnf_download" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
         if [ "$_rnf_size" -lt 50000 ] || response_looks_like_error_page "$_rnf_download" || \
            ! grep -q '^SCRIPT_VERSION=' "$_rnf_download" || ! grep -q '^main_menu()' "$_rnf_download" || \
-           [ "$_rnf_last" != main_menu ] || \
+           ! nfmenu_final_main_menu_call "$_rnf_download" || \\
            ! grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_download" || ! sh -n "$_rnf_download"; then
             rm -f "$_rnf_download" "$_rnf_run"
             say "${RED}Проверка источника nfqws-menu не пройдена; выполнение отменено.${RESET}"
@@ -3167,19 +3206,7 @@ run_nfmenu_action() {
     # Remove only the final nonblank `main_menu` invocation. The awk script
     # buffers blank lines so interior blank lines (including here-doc content)
     # are preserved exactly; trailing blank lines are emitted after the last line.
-    if ! awk '
-        /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
-        {
-            if (have_line) printf "%s\n", line
-            if (length(pending)) { printf "%s", pending; pending = "" }
-            line = $0
-            have_line = 1
-        }
-        END {
-            if (have_line && line !~ /^[[:space:]]*main_menu[[:space:]]*$/) print line
-            if (length(pending)) printf "%s", pending
-        }
-    ' "$_rnf_src" > "$_rnf_run"; then
+    if ! nfmenu_strip_final_main_menu_call "$_rnf_src" > "$_rnf_run"; then
         rm -f "$_rnf_run"
         return 1
     fi
@@ -3460,6 +3487,7 @@ remove_all_nf_components() {
     confirm 'Удалить все установленные пакеты NFQWS и NFQWS UI? Пользовательские конфиги будут сохранены.' || { say 'Удаление отменено.'; return 1; }
     _ran_failed=0
     for _ran_pkg in nfqws2-ui nfqws-ui nfqws-keenetic-web nfqws2-keenetic nfqws-keenetic; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { say 'Удаление пакетов NFQWS прервано; оставшиеся пакеты сохранены.'; return 130; }
         if is_installed "$_ran_pkg"; then
             say "Удаление пакета $_ran_pkg..."
             opkg remove "$_ran_pkg" || _ran_failed=1
@@ -3501,6 +3529,7 @@ remove_component_backups() {
     _rb_removed=0
     _rb_failed=0
     while IFS= read -r _rb_file || [ -n "$_rb_file" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rb_list"; say 'Очистка прервана; оставшиеся файлы сохранены.'; return 130; }
         [ -n "$_rb_file" ] || continue
         if rm -f "$_rb_file" 2>/dev/null; then
             _rb_removed=$((_rb_removed + 1))
@@ -3550,6 +3579,7 @@ remove_nfqw2_blobs() {
     _rnb_removed=0
     _rnb_failed=0
     while IFS= read -r _rnb_file || [ -n "$_rnb_file" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rnb_list"; say 'Удаление blobs прервано; оставшиеся файлы сохранены.'; return 130; }
         [ -n "$_rnb_file" ] || continue
         if rm -f "$_rnb_file" 2>/dev/null; then
             _rnb_removed=$((_rnb_removed + 1))
