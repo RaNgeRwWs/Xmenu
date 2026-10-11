@@ -33,6 +33,7 @@ XMENU_UPDATE_CACHE="$ROOT_DIR/xmenu-update.cache"
 XMENU_UPDATE_LOCK="$ROOT_DIR/.xmenu-update-check.lock"
 XMENU_COMPONENT_CACHE="$ROOT_DIR/components-status.cache"
 XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components-status.cache.time"
+XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/.xmenu-component-refresh.lock"
 trap 'XMENU_UPDATE_REDRAW=1' USR1
 cleanup() {
     _cleanup_mode=${1:-release}
@@ -54,7 +55,7 @@ cleanup() {
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
         rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
-        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized "$ROOT_DIR"/install-xkeen-stable-auto."$$" "$ROOT_DIR"/.components-installed.* "$ROOT_DIR"/.opkg-installed.*; do
+        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized "$ROOT_DIR"/install-xkeen-stable-auto."$$" "$ROOT_DIR/.components-installed.$$" "$ROOT_DIR/.opkg-installed.$$"; do
             [ -e "$_cleanup_path" ] || [ -L "$_cleanup_path" ] || continue
             case "$_cleanup_path" in /tmp/xmenu-*|"$ROOT_DIR"/*) rm -rf "$_cleanup_path" 2>/dev/null || : ;; esac
         done
@@ -2392,8 +2393,35 @@ invalidate_component_status_cache() {
     rm -f "$XMENU_COMPONENT_CACHE" "$XMENU_COMPONENT_CACHE_TIME"
 }
 
-render_component_statuses() {
-    if component_status_cache_fresh; then
+render_component_status_table() {
+    _rcst_file=$1
+    if [ "$(get_ui_lang)" = en ]; then
+        say "${PURPLE}Installed components:${RESET}"
+    else
+        say "${PURPLE}Установленные компоненты:${RESET}"
+    fi
+    component_table_header
+    while IFS="$(printf '\t')" read -r _row_label _row_version || [ -n "$_row_label" ]; do
+        case "$_row_version" in
+            'версия неизвестна'|'ELF несовместим с Entware')
+                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$YELLOW" "$_row_version" "$GREEN" "$RESET"
+                ;;
+            *)
+                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$PURPLE" "$_row_version" "$GREEN" "$RESET"
+                ;;
+        esac
+    done < "$_rcst_file"
+    if [ ! -s "$_rcst_file" ]; then
+        if [ "$(get_ui_lang)" = en ]; then
+            say "  ${YELLOW}No managed components installed yet.${RESET}"
+        else
+            say "  ${YELLOW}Управляемые компоненты пока не установлены.${RESET}"
+        fi
+    fi
+}
+
+render_component_statuses_sync() {
+    if [ "${XMENU_FORCE_COMPONENT_REFRESH:-0}" != 1 ] && component_status_cache_fresh; then
         _COMPONENT_INSTALLED_FILE="$XMENU_COMPONENT_CACHE"
         _XMENU_COMPONENT_CACHE_HIT=1
         _OPKG_RENDER_CACHE_FILE=''
@@ -2489,28 +2517,90 @@ render_component_statuses() {
         fi
     fi
 
-    if [ "$(get_ui_lang)" = en ]; then
-        say "${PURPLE}Installed components:${RESET}"
-    else
-        say "${PURPLE}Установленные компоненты:${RESET}"
-    fi
-    component_table_header
-    while IFS="$(printf '\t')" read -r _row_label _row_version || [ -n "$_row_label" ]; do
-        case "$_row_version" in
-            'версия неизвестна'|'ELF несовместим с Entware')
-                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$YELLOW" "$_row_version" "$GREEN" "$RESET"
-                ;;
-            *)
-                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$PURPLE" "$_row_version" "$GREEN" "$RESET"
-                ;;
-        esac
-    done < "$_COMPONENT_INSTALLED_FILE"
-    if [ ! -s "$_COMPONENT_INSTALLED_FILE" ]; then
-        if [ "$(get_ui_lang)" = en ]; then say "  ${YELLOW}No managed components installed yet.${RESET}"; else say "  ${YELLOW}Управляемые компоненты пока не установлены.${RESET}"; fi
-    fi
+    render_component_status_table "$_COMPONENT_INSTALLED_FILE"
     if [ "${_XMENU_COMPONENT_CACHE_HIT:-0}" != 1 ]; then rm -f "$_COMPONENT_INSTALLED_FILE"; fi
     [ -z "${_OPKG_RENDER_CACHE_FILE:-}" ] || rm -f "$_OPKG_RENDER_CACHE_FILE"
     _OPKG_RENDER_CACHE_FILE=''
+}
+
+# Return success when another live process is already refreshing the component cache.
+component_refresh_is_running() {
+    [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 1
+    _crir_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
+    case "$_crir_worker" in
+        ''|*[!0-9]*)
+            _crir_owner=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)
+            case "$_crir_owner" in
+                ''|*[!0-9]*) ;;
+                *) if kill -0 "$_crir_owner" 2>/dev/null; then return 0; fi ;;
+            esac
+            ;;
+        *)
+            if kill -0 "$_crir_worker" 2>/dev/null; then return 0; fi
+            ;;
+    esac
+    rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+    return 1
+}
+
+start_component_status_refresh() {
+    [ -r /opt/bin/xmenu ] || return 1
+    mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
+    component_refresh_is_running && return 0
+    if ! mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null; then
+        component_refresh_is_running && return 0
+        mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || return 1
+    fi
+    printf '%s\n' "$$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || {
+        rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+        return 1
+    }
+    ( sh /opt/bin/xmenu __refresh-component-cache "$$" ) </dev/null >/dev/null 2>&1 &
+    _scr_pid=$!
+    printf '%s\n' "$_scr_pid" > "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :
+    return 0
+}
+
+# Normal rendering never waits for slow version probes. It uses a fresh cache,
+# falls back to last known rows while revalidating, and redraws when the worker ends.
+render_component_statuses() {
+    if [ "${XMENU_FORCE_COMPONENT_REFRESH:-0}" = 1 ]; then
+        render_component_statuses_sync
+        return $?
+    fi
+
+    if component_status_cache_fresh; then
+        render_component_status_table "$XMENU_COMPONENT_CACHE"
+        return $?
+    fi
+
+    if ! start_component_status_refresh; then
+        XMENU_FORCE_COMPONENT_REFRESH=1
+        render_component_statuses_sync
+        _rcs_rc=$?
+        unset XMENU_FORCE_COMPONENT_REFRESH
+        return "$_rcs_rc"
+    fi
+
+    if [ -f "$XMENU_COMPONENT_CACHE" ]; then
+        render_component_status_table "$XMENU_COMPONENT_CACHE"
+        if [ "$(get_ui_lang)" = en ]; then
+            say "  ${YELLOW}Refreshing component details in the background...${RESET}"
+        else
+            say "  ${YELLOW}Обновляю сведения о компонентах в фоне...${RESET}"
+        fi
+    else
+        if [ "$(get_ui_lang)" = en ]; then
+            say "${PURPLE}Installed components:${RESET}"
+            component_table_header
+            say "  ${YELLOW}Collecting component details in the background...${RESET}"
+        else
+            say "${PURPLE}Установленные компоненты:${RESET}"
+            component_table_header
+            say "  ${YELLOW}Собираю сведения о компонентах в фоне...${RESET}"
+        fi
+    fi
+    return 0
 }
 
 show_status() {
@@ -2524,7 +2614,7 @@ show_status() {
         say "Роутер: $_model | KeeneticOS: ${_fw:-не определена} | ARCH: $_arch"
     fi
     say ''
-    render_component_statuses
+    render_component_statuses_sync
     _status_strategy=$(active_strategy_label)
     if [ "$(get_ui_lang)" = en ]; then say "  Active strategy: ${CYAN}$_status_strategy${RESET}"; else say "  Активная стратегия: ${CYAN}$_status_strategy${RESET}"; fi
     ps w 2>/dev/null | grep -q '[m]ihomo' && say "${GREEN}Mihomo: запущен ⚡${RESET}" || :
@@ -3896,6 +3986,27 @@ main() {
     ensure_dirs || return 1
     [ -s "$LANG_FILE" ] || printf 'ru\n' > "$LANG_FILE" 2>/dev/null || :
     case "${1:-menu}" in
+        __refresh-component-cache)
+            _xcrc_parent=${2:-}
+            XMENU_FORCE_COMPONENT_REFRESH=1
+            export XMENU_FORCE_COMPONENT_REFRESH
+            render_component_statuses_sync >/dev/null 2>&1
+            _xcrc_rc=$?
+            if [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] &&
+               [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ] &&
+               [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)" = "$$" ]; then
+                rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+            fi
+            case "$_xcrc_parent" in
+                ''|*[!0-9]*) : ;;
+                *)
+                    if [ -r "/proc/$_xcrc_parent/cmdline" ] &&
+                       tr -d '\000' < "/proc/$_xcrc_parent/cmdline" 2>/dev/null | grep -qi 'xmenu'; then
+                        kill -USR1 "$_xcrc_parent" 2>/dev/null || :
+                    fi
+                    ;;
+            esac
+            return "$_xcrc_rc" ;;
         sync|update-strategies)
             ensure_network || return 1
             sync_active_blobs
