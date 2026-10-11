@@ -1,6 +1,6 @@
 <div align="center">
 
-# Xmenu ◆ v1.2.1
+# ◆ Xmenu
 
 **Интерактивное меню для Keenetic / Netcraze с Entware**
 
