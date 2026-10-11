@@ -35,6 +35,18 @@ XMENU_COMPONENT_CACHE="$ROOT_DIR/components-status.cache"
 XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components-status.cache.time"
 XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/.xmenu-component-refresh.lock"
 trap 'XMENU_UPDATE_REDRAW=1' USR1
+stop_component_status_refresh() {
+    [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 0
+    [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$" ] || return 0
+    _scsr_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
+    case "$_scsr_worker" in
+        ''|*[!0-9]*) : ;;
+        *) [ "$_scsr_worker" = "$" ] || kill "$_scsr_worker" 2>/dev/null || : ;;
+    esac
+    rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+    return 0
+}
+
 cleanup() {
     _cleanup_mode=${1:-release}
     if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ]; then
@@ -54,7 +66,8 @@ cleanup() {
             kill "$XMENU_UPDATE_CHECK_PID" 2>/dev/null || :
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
-        rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
+        stop_component_status_refresh
+        rm -f "$ROOT_DIR/.xmenu-update-cache.$" /tmp/xmenu-version-"$" 2>/dev/null || :
         for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized "$ROOT_DIR"/install-xkeen-stable-auto."$$" "$ROOT_DIR/.components-installed.$$" "$ROOT_DIR/.opkg-installed.$$"; do
             [ -e "$_cleanup_path" ] || [ -L "$_cleanup_path" ] || continue
             case "$_cleanup_path" in /tmp/xmenu-*|"$ROOT_DIR"/*) rm -rf "$_cleanup_path" 2>/dev/null || : ;; esac
@@ -230,6 +243,12 @@ menu_item() {
     _mi_text_width=$((_mi_term_width - 11))
     [ "$_mi_text_width" -ge 20 ] 2>/dev/null || _mi_text_width=20
     _mi_first_prefix="      $(printf '%2s.  ' "$_mi_number")"
+    # Fast path: most menu labels fit on one line. Avoid starting awk for those.
+    _mi_text_length=${#_mi_text}
+    if [ "$_mi_text_length" -le "$_mi_text_width" ] 2>/dev/null; then
+        printf '%s%s\n' "$_mi_first_prefix" "$_mi_text"
+        return 0
+    fi
     # Passing the label through stdin avoids accidental shell expansion in a heredoc.
     printf '%s\n' "$_mi_text" | LC_ALL=C awk -v width="$_mi_text_width" -v first="$_mi_first_prefix" -v cont='           ' '
         function cell_length(s, t) {
@@ -307,6 +326,18 @@ confirm_no() {
         case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
             y|yes|да|д|true|1) return 0 ;;
             ''|n|no|нет|н|false|0) return 1 ;;
+            *) say "Введите да или нет (y/n)." ;;
+        esac
+    done
+}
+
+# Подтверждение с безопасным ответом «да» по умолчанию (например, сохранить бэкапы).
+confirm_yes() {
+    while :; do
+        _read_or_eof "${YELLOW}${1:-Сохранить?} [Y/n]: ${RESET}" || return 0
+        case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
+            ''|y|yes|да|д|true|1) return 0 ;;
+            n|no|нет|н|false|0) return 1 ;;
             *) say "Введите да или нет (y/n)." ;;
         esac
     done
@@ -2544,20 +2575,38 @@ component_refresh_is_running() {
 }
 
 start_component_status_refresh() {
-    [ -r /opt/bin/xmenu ] || return 1
     mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
     component_refresh_is_running && return 0
     if ! mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null; then
         component_refresh_is_running && return 0
         mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || return 1
     fi
-    printf '%s\n' "$$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || {
+    printf '%s\n' "$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || {
         rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
         return 1
     }
-    sh /opt/bin/xmenu __refresh-component-cache "$$" </dev/null >/dev/null 2>&1 &
-    _scr_pid=$!
-    printf '%s\n' "$_scr_pid" > "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :
+
+    # Resolve the script currently running instead of assuming /opt/bin/xmenu.
+    case "$0" in
+        /*) _scr_source=$0 ;;
+        */*) _scr_source="$PWD/$0" ;;
+        *)
+            _scr_source=$(command -v "$0" 2>/dev/null || :)
+            [ -r "$_scr_source" ] || { [ -r "$0" ] && _scr_source="$PWD/$0"; }
+            ;;
+    esac
+    [ -r "$_scr_source" ] || _scr_source=/opt/bin/xmenu
+    [ -r "$_scr_source" ] || {
+        rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+        return 1
+    }
+
+    # The wrapper writes its own PID before exec, so the worker cannot finish
+    # and remove the lock before check_pid has been published by the parent.
+    sh -c '
+        printf "%s\n" "$" > "$1/check_pid" 2>/dev/null || exit 1
+        exec sh "$2" __refresh-component-cache "$3"
+    ' xmenu-component-refresh "$XMENU_COMPONENT_REFRESH_LOCK" "$_scr_source" "$" </dev/null >/dev/null 2>&1 &
     return 0
 }
 
@@ -2885,9 +2934,10 @@ xmenu_wget_bounded() {
         busybox timeout "$_xwb_limit" "$_xwb_wget" "$@"
         return $?
     fi
-    # Do not fall back to wget without a process deadline: -T alone is a
-    # per-read timeout and can still wait for a painfully slow stream forever.
-    return 125
+    # BusyBox wget's -T sets a network read timeout; callers also pass -t 1,
+    # so do not disable downloads solely because the timeout applet is absent.
+    "$_xwb_wget" "$@"
+    return $?
 }
 
 xmenu_fetch_file() {
@@ -3946,10 +3996,25 @@ remove_menu() {
     XMENU_REMOVED=0
     if [ "$(get_ui_lang)" = en ]; then
         _remove_prompt='Delete Xmenu and all its files and components?'
+        _remove_keep_prompt="Keep configuration backups in $BACKUP_DIR?"
+        _remove_delete_prompt="Delete all configuration backups in $BACKUP_DIR?"
     else
         _remove_prompt='Удалить xmenu и все его файлы и компоненты?'
+        _remove_keep_prompt="Сохранить резервные копии конфигураций в $BACKUP_DIR?"
+        _remove_delete_prompt="Удалить все резервные копии конфигураций в $BACKUP_DIR?"
     fi
     if ! confirm "$_remove_prompt"; then return 1; fi
+
+    # Keep backups by default. A negative answer requires a second, explicit
+    # confirmation before any user configuration archives are deleted.
+    _remove_keep_backups=1
+    if ! confirm_yes "$_remove_keep_prompt"; then
+        if confirm_no "$_remove_delete_prompt"; then
+            _remove_keep_backups=0
+        else
+            _remove_keep_backups=1
+        fi
+    fi
 
     _c=$(mktemp "$ROOT_DIR/crontab.XXXXXX" 2>/dev/null) || _c="$ROOT_DIR/crontab.$(date +%s)"
     if command -v crontab >/dev/null 2>&1 && crontab -l > "$_c" 2>/dev/null; then
@@ -3960,13 +4025,29 @@ remove_menu() {
             return 1
         fi
     fi
+
+    # Stop this session's status worker before removing the directory that holds its lock.
+    stop_component_status_refresh
     rm -f "$_c.next" "$_c"
     rm -f /opt/bin/xmenu /opt/bin/xmenu.bak*
-    # Удаляем весь каталог, принадлежащий Xmenu: конфигурацию, манифесты,
-    # кэш, временные маркеры и резервные копии. Установленные отдельно
-    # компоненты (например, XKeen и nfqws2) этим действием не удаляются.
-    rm -rf "$ROOT_DIR"
-    say "${GREEN}Xmenu и все его служебные файлы, кэш и бэкапы удалены. XKeen/nfqws2 сохранены.${RESET}"
+
+    if [ "$_remove_keep_backups" = 1 ]; then
+        # Remove all Xmenu-owned entries except the backups directory itself.
+        for _remove_path in "$ROOT_DIR"/* "$ROOT_DIR"/.[!.]* "$ROOT_DIR"/..?*; do
+            [ -e "$_remove_path" ] || [ -L "$_remove_path" ] || continue
+            [ "$_remove_path" = "$BACKUP_DIR" ] && continue
+            rm -rf "$_remove_path" 2>/dev/null || :
+        done
+        if [ -d "$BACKUP_DIR" ]; then
+            say "${GREEN}Xmenu удалён; резервные копии сохранены в $BACKUP_DIR. XKeen/nfqws2 сохранены.${RESET}"
+        else
+            rmdir "$ROOT_DIR" 2>/dev/null || :
+            say "${GREEN}Xmenu удалён. Каталог резервных копий не найден. XKeen/nfqws2 сохранены.${RESET}"
+        fi
+    else
+        rm -rf "$ROOT_DIR"
+        say "${GREEN}Xmenu удалён вместе с конфигурацией и резервными копиями. XKeen/nfqws2 сохранены.${RESET}"
+    fi
     XMENU_REMOVED=1
     return 0
 }
@@ -3990,8 +4071,7 @@ main() {
             render_component_statuses_sync >/dev/null 2>&1
             _xcrc_rc=$?
             if [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] &&
-               [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ] &&
-               [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)" = "$$" ]; then
+               [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ]; then
                 rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
             fi
             case "$_xcrc_parent" in
@@ -4132,6 +4212,10 @@ install_xmenu_command() {
         *) _ix_source="$PWD/$_ix_source" ;;
     esac
     [ -f "$_ix_source" ] && [ -r "$_ix_source" ] || return 0
+    if [ -f "$_ix_target" ] && command -v cmp >/dev/null 2>&1 &&
+       cmp -s "$_ix_source" "$_ix_target"; then
+        return 0
+    fi
     mkdir -p /opt/bin || {
         say "${RED}Не удалось создать /opt/bin; установи скрипт вручную в /opt/bin/xmenu.${RESET}"
         return 1
