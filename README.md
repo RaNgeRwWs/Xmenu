@@ -8,7 +8,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Keenetic%20%7C%20Netcraze-blue)
 ![Shell](https://img.shields.io/badge/shell-POSIX%20sh%20%7C%20BusyBox%20ash-green)
-![Version](https://img.shields.io/badge/version-v1.2.1-purple)
+![Version](https://img.shields.io/badge/version-v1.2.2-purple)
 ![Environment](https://img.shields.io/badge/environment-Entware-orange)
 
 </div>
@@ -114,7 +114,7 @@ sh /opt/bin/xmenu
 
 ## 🧭 Карта главного меню
 
-Ниже приведена карта меню для текущей версии **v1.2.1**. Некоторые возможности внутри пунктов запускают меню или установщик стороннего проекта.
+Ниже приведена карта меню для текущей версии **v1.2.2**. Некоторые возможности внутри пунктов запускают меню или установщик стороннего проекта.
 
 | № | Раздел | Назначение |
 |---:|---|---|
@@ -374,7 +374,7 @@ Xmenu объединяет действия, которые взаимодейс
 
 <div align="center">
 
-**Xmenu ◆ v1.2.1**  
+**Xmenu ◆ v1.2.2**  
 *Инструменты обслуживания Entware — в одном меню.*
 
 </div>
