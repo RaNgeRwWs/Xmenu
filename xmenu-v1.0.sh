@@ -52,7 +52,7 @@ cleanup() {
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
         fi
         rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
-        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
+        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$"* "$ROOT_DIR"/.*."$"* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
             "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* \
             "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* \
             "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized \
@@ -106,6 +106,26 @@ say() { printf '%s\n' "$*"; }
 # Attempt to open /dev/tty before redirecting interactive installer I/O.
 has_controlling_tty() {
     ( : </dev/tty ) >/dev/null 2>&1
+}
+
+read_uptime_tenths() {
+    _uptime_tenths=''
+    [ -r /proc/uptime ] || return 1
+    _xru_raw=''
+    IFS=' ' read -r _xru_raw _xru_rest < /proc/uptime 2>/dev/null || return 1
+    case "${_xru_raw}" in ''|*[!0-9.]*|*.*.*) return 1 ;; esac
+    case "${_xru_raw}" in
+        *.*)
+            _xru_whole=${_xru_raw%%.*}
+            _xru_frac=${_xru_raw#*.}
+            _xru_frac=${_xru_frac%"${_xru_frac#?}"}
+            ;;
+        *) _xru_whole=${_xru_raw}; _xru_frac=0 ;;
+    esac
+    case "${_xru_whole}" in ''|*[!0-9]*) return 1 ;; esac
+    case "${_xru_frac}" in ''|*[!0-9]*) _xru_frac=0 ;; esac
+    _uptime_tenths=$((_xru_whole * 10 + _xru_frac))
+    return 0
 }
 
 # Portable response-page check: inspect only the first few lines.
@@ -198,7 +218,8 @@ terminal_width() {
 }
 
 line() {
-    _line_width=$(terminal_width)
+    _line_width=${_XMENU_RENDER_WIDTH:-}
+    [ -n "$_line_width" ] || _line_width=$(terminal_width)
     _line_text=$(printf '%*s' "$_line_width" '' | tr ' ' '=')
     say "${PURPLE}$_line_text${RESET}"
 }
@@ -206,7 +227,8 @@ menu_item() {
     _mi_number=$1
     shift
     _mi_text=$*
-    _mi_term_width=$(terminal_width)
+    _mi_term_width=${_XMENU_RENDER_WIDTH:-}
+    [ -n "$_mi_term_width" ] || _mi_term_width=$(terminal_width)
     _mi_text_width=$((_mi_term_width - 11))
     [ "$_mi_text_width" -ge 20 ] 2>/dev/null || _mi_text_width=20
     _mi_first_prefix="      $(printf '%2s.  ' "$_mi_number")"
@@ -243,6 +265,10 @@ menu_item() {
     '
 }
 pause() {
+    if [ "${INTERRUPTED:-0}" = 1 ]; then
+        INTERRUPTED=0
+        return 0
+    fi
     if [ "$(get_ui_lang)" = en ]; then printf '\nPress Enter to return...';
     else printf '\nНажми Enter для возврата...'; fi
     _read_or_eof '' || :
@@ -924,7 +950,10 @@ ensure_geoipset_cron() {
     _GIP_CRON_CURRENT="$ROOT_DIR/crontab-geoipset-current.$$"
     _GIP_CRON_NEXT="$ROOT_DIR/crontab-geoipset-next.$$"
     crontab -l > "$_GIP_CRON_CURRENT" 2>/dev/null || : > "$_GIP_CRON_CURRENT"
-    grep -Fv 'XMENU_GEOIPSET_DAILY_0430' "$_GIP_CRON_CURRENT" > "$_GIP_CRON_NEXT" || :
+    # Xmenu owns this schedule: remove its previous entry and any untagged
+    # XKeen GeoFile job so that only the daily 04:30 Xmenu job remains.
+    grep -Fv 'XMENU_GEOIPSET_DAILY_0430' "$_GIP_CRON_CURRENT" |
+        grep -Fv '/opt/sbin/xkeen -ug' > "$_GIP_CRON_NEXT" || :
     printf '%s\n' '30 4 * * * /opt/sbin/xkeen -ug >> /opt/var/log/xkeen-geoipset-update.log 2>&1 # XMENU_GEOIPSET_DAILY_0430' >> "$_GIP_CRON_NEXT" || {
         rm -f "$_GIP_CRON_CURRENT" "$_GIP_CRON_NEXT"
         return 1
@@ -991,7 +1020,7 @@ install_xkeen_auto() {
     [ "$_rc" -eq 0 ] || { say "${RED}Установка Mihomo $_mh_tag завершилась с кодом $_rc.${RESET}"; cleanup; return "$_rc"; }
 
     say 'Настраиваю автоматический режим, GeoIP/GeoIPSet, cron и автозагрузку...'
-    /opt/sbin/xkeen -i auto cores=none geo=on geoipset=on cron=on autostart=on
+    /opt/sbin/xkeen -i auto cores=none geo=on geoipset=on cron=off autostart=on
     _rc=$?
     cleanup
     if [ "$_rc" -ne 0 ]; then
@@ -1169,8 +1198,13 @@ install_xkeen_ui_umarcheh001() {
         rm -rf "$_uiwork"; say 'Не удалось разместить файлы панели.'; return 1
     }
     say 'Запускаю официальный install.sh umarcheh001...'
-    (cd /opt/xkeen-ui && sh ./install.sh)
-    _uirc=$?
+    if has_controlling_tty; then
+        (cd /opt/xkeen-ui && sh ./install.sh) </dev/tty >/dev/tty 2>&1
+        _uirc=$?
+    else
+        (cd /opt/xkeen-ui && sh ./install.sh)
+        _uirc=$?
+    fi
     if [ "$_uirc" -ne 0 ]; then
         say "${RED}Установщик завершился с кодом $_uirc.${RESET}"
         rm -rf /opt/xkeen-ui
@@ -1500,6 +1534,7 @@ update_blobs_for() {
 
     _ub_failed=0
     while IFS= read -r _ub_path || [ -n "$_ub_path" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ub_work"; say 'Загрузка blobs прервана пользователем.'; return 130; }
         [ -n "$_ub_path" ] || continue
         _ub_name=${_ub_path##*/}
         case "$_ub_name" in *[!A-Za-z0-9_.+-]*|*..*|.|..) say "${YELLOW}Пропуск небезопасного имени blob: $_ub_name${RESET}"; _ub_failed=1; continue ;; esac
@@ -1558,6 +1593,7 @@ update_blobs_for() {
             say "${RED}Не удалось загрузить/проверить SHA-256 для blob $_ub_name.${RESET}"
         fi
     done < "$_ub_work/paths"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ub_work"; say 'Загрузка blobs прервана пользователем.'; return 130; }
     rm -rf "$_ub_work"
     [ "$_ub_failed" -eq 0 ]
 }
@@ -1589,6 +1625,7 @@ update_lists_for() {
     _ul_i=0
     _ul_fail=0
     while IFS= read -r _ul_ref || [ -n "$_ul_ref" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ul_work"; say 'Загрузка списков прервана пользователем.'; return 130; }
         [ -n "$_ul_ref" ] || continue
         _ul_i=$((_ul_i + 1))
         _ul_name=${_ul_ref##*/}
@@ -1651,6 +1688,7 @@ update_lists_for() {
             _ul_fail=$((_ul_fail + 1))
         fi
     done < "$_ul_work/refs"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ul_work"; say 'Загрузка списков прервана пользователем.'; return 130; }
     rm -rf "$_ul_work"
     [ "$_ul_fail" -eq 0 ]
 }
@@ -1683,6 +1721,7 @@ install_all_nfqw2_blobs() {
     _blob_ok=0
     _blob_fail=0
     while IFS= read -r _blob_line || [ -n "$_blob_line" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_blob_work"; say 'Установка blobs прервана пользователем.'; return 130; }
         _blob_hash=$(printf '%s\n' "$_blob_line" | awk 'NF>=2 {print $1; exit}')
         _blob_name=$(printf '%s\n' "$_blob_line" | awk 'NF>=2 {n=$2; sub(/^\*/, "", n); print n; exit}')
         case "$_blob_hash" in *[!0-9a-fA-F]*|'') continue ;; esac
@@ -1721,6 +1760,7 @@ install_all_nfqw2_blobs() {
             say "${RED}Ошибка загрузки или SHA-256 для $_blob_name; файл не установлен.${RESET}"
         fi
     done < "$_blob_work/SHA256SUMS"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_blob_work"; say 'Установка blobs прервана пользователем.'; return 130; }
     rm -rf "$_blob_work"
     say "${GREEN}Установлено/проверено $_blob_ok из $_blob_total blobs в $_blob_dir.${RESET}"
     if [ "$_blob_fail" -gt 0 ] || [ "$_blob_ok" -ne "$_blob_total" ]; then
@@ -2812,7 +2852,7 @@ xmenu_start_update_check() {
 
 xmenu_read_menu_prompt() {
     _xrmp_prompt=$1
-    printf '%b' "$_xrmp_prompt"
+    printf '%b' "${_xrmp_prompt}"
     if [ ! -t 0 ] || ! has_controlling_tty; then
         _read_or_eof ''
         return $?
@@ -2823,31 +2863,42 @@ xmenu_read_menu_prompt() {
             printf '\n'
             return 2
         fi
+        read_uptime_tenths && _xrmp_before_ticks=$_uptime_tenths || _xrmp_before_ticks=''
         IFS= read -r -t 1 _read_value </dev/tty
         _xrmp_rc=$?
-        if [ "$_xrmp_rc" -eq 0 ]; then
-            _read_value=$(printf '%s' "$_read_value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        read_uptime_tenths && _xrmp_after_ticks=$_uptime_tenths || _xrmp_after_ticks=''
+        if [ "${_xrmp_rc}" -eq 0 ]; then
+            _read_value=$(printf '%s' "${_read_value}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             return 0
         fi
-        # A signal can interrupt read with a non-timeout status: prioritize the
-        # redraw flag before deciding that this ash lacks read -t support.
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
             printf '\n'
             return 2
         fi
         if [ "${INTERRUPTED:-0}" = 1 ]; then return 1; fi
-        # BusyBox ash returns 1 for a read timeout. If -t is unsupported, use
-        # the normal blocking prompt as a portable fallback.
-        if [ "$_xrmp_rc" -gt 1 ]; then
+        if ! has_controlling_tty; then return 1; fi
+        if [ "${_xrmp_rc}" -eq 1 ]; then
+            # BusyBox ash may report both timeout and EOF as status 1. A normal
+            # one-second timeout advances /proc/uptime; an immediate EOF does not.
+            case "${_xrmp_before_ticks}:${_xrmp_after_ticks}" in
+                *[!0-9:]*|:*|*:)
+                    sleep 0.1 >/dev/null 2>&1 || sleep 1
+                    ;;
+                *)
+                    _xrmp_elapsed=$((_xrmp_after_ticks - _xrmp_before_ticks))
+                    [ "${_xrmp_elapsed}" -ge 5 ] || return 1
+                    ;;
+            esac
+        fi
+        # If -t is unsupported, use the normal blocking prompt as a fallback.
+        if [ "${_xrmp_rc}" -gt 1 ]; then
             _read_or_eof ''
             return $?
         fi
     done
 }
 
-# Обновляет Xmenu без зависимости от opkg. Проверенный скрипт атомарно заменяет
-# /opt/bin/xmenu, затем немедленно перезапускает новое меню.
 update_xmenu_script() {
     _ux_target='/opt/bin/xmenu'
     _ux_tmp="/opt/bin/.xmenu-update.$$"
@@ -2954,7 +3005,7 @@ xmenu_opkg_set_mirror() {
         }
         {
             line=$0
-            if ($1 == "src/gz" && NF >= 3) {
+            if (($1 == "src/gz" || $1 == "src") && NF >= 3) {
                 url=$3
                 sub(/\r$/, "", url)
                 replacement=mirror_url(url)
@@ -2973,7 +3024,7 @@ xmenu_opkg_set_mirror() {
     if [ "$_osm_rc" -ne 0 ] || [ ! -s "$_osm_tmp" ]; then
         rm -f "$_osm_tmp"
         say "${YELLOW}В $_osm_conf не найдено распознаваемых источников официальных зеркал Entware. Файл не изменён.${RESET}"
-        say 'Проверь строки src/gz в /opt/etc/opkg.conf; кастомные и сторонние репозитории автоматически не переписываются.'
+        say 'Проверь строки src и src/gz в /opt/etc/opkg.conf; кастомные и сторонние репозитории автоматически не переписываются.'
         return 1
     fi
     if ! cmp -s "$_osm_conf" "$_osm_tmp" 2>/dev/null; then
@@ -3173,6 +3224,7 @@ XMENU_NFQWS_ACTION_EOF
 # The main menu is the single entry point; duplicate unreachable install/service menus were removed.
 
 render_menu() {
+    _XMENU_RENDER_WIDTH=$(terminal_width)
     [ -t 1 ] && printf '\033[2J\033[H'
     _lang=$(get_ui_lang)
     # Router model, firmware and Entware architecture do not change during one menu session.
@@ -3305,6 +3357,7 @@ render_menu() {
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
     line
+    _XMENU_RENDER_WIDTH=''
 }
 
 # ---------------------------- Component removal ----------------------------
@@ -3394,6 +3447,11 @@ remove_xkeen_core() {
         /opt/sbin/xkeen -dx
         return $?
     fi
+    if [ "$_rxc_core" = mihomo ] && [ -x /opt/sbin/xkeen ]; then
+        confirm 'Удалить Mihomo штатной командой xkeen -dm? Конфигурация Mihomo может быть удалена самой XKeen.' || { say 'Удаление отменено.'; return 1; }
+        /opt/sbin/xkeen -dm
+        return $?
+    fi
     say "${YELLOW}$_rxc_core не является отдельным opkg-пакетом. Автоматическое удаление бинарника отключено, чтобы не повредить управление XKeen/конфиги.${RESET}"
     return 1
 }
@@ -3436,6 +3494,7 @@ remove_component_backups() {
     _rb_count=$(wc -l < "$_rb_list" | tr -d ' ')
     say "Будет удалено резервных файлов: $_rb_count"
     while IFS= read -r _rb_file || [ -n "$_rb_file" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rb_list"; say 'Очистка прервана; оставшиеся файлы сохранены.'; return 130; }
         [ -n "$_rb_file" ] && printf '  %s\n' "$_rb_file"
     done < "$_rb_list"
     confirm_no 'Подтвердить удаление перечисленных резервных файлов?' || { rm -f "$_rb_list"; say 'Очистка отменена.'; return 1; }
@@ -3450,6 +3509,7 @@ remove_component_backups() {
             say "${RED}Не удалось удалить: $_rb_file${RESET}"
         fi
     done < "$_rb_list"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rb_list"; say 'Очистка прервана.'; return 130; }
     rm -f "$_rb_list"
     say "Удалено резервных файлов: $_rb_removed"
     [ "$_rb_failed" -eq 0 ]
@@ -3478,6 +3538,7 @@ remove_nfqw2_blobs() {
     _rnb_count=$(wc -l < "$_rnb_list" | tr -d ' ')
     say "Найдено blobs для удаления: $_rnb_count"
     while IFS= read -r _rnb_file || [ -n "$_rnb_file" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rnb_list"; say 'Удаление blobs прервано; оставшиеся файлы сохранены.'; return 130; }
         [ -n "$_rnb_file" ] && printf '  %s\n' "$_rnb_file"
     done < "$_rnb_list"
     if [ "$(get_ui_lang)" = en ]; then
@@ -3497,6 +3558,7 @@ remove_nfqw2_blobs() {
             say "${RED}Не удалось удалить: $_rnb_file${RESET}"
         fi
     done < "$_rnb_list"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rnb_list"; say 'Удаление blobs прервано.'; return 130; }
     rm -f "$_rnb_list"
     say "Удалено blobs: $_rnb_removed из $_rnb_count."
     [ "$_rnb_failed" -eq 0 ]
@@ -3530,6 +3592,7 @@ remove_xmenu_backups() {
     _rxb_count=$(wc -l < "$_rxb_list" | tr -d ' ')
     say "Найдено файлов резервных копий Xmenu: $_rxb_count"
     while IFS= read -r _rxb_file || [ -n "$_rxb_file" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rxb_list"; say 'Очистка бэкапов прервана.'; return 130; }
         [ -n "$_rxb_file" ] && printf '  %s\n' "$_rxb_file"
     done < "$_rxb_list"
     if [ "$(get_ui_lang)" = en ]; then
@@ -3539,13 +3602,22 @@ remove_xmenu_backups() {
     fi
     confirm_no "$_rxb_prompt" || { rm -f "$_rxb_list"; say 'Удаление отменено.'; return 1; }
     _rxb_failed=0
-    if [ -d /opt/bin ]; then
-        find /opt/bin -maxdepth 1 \( -type f -o -type l \) -name 'xmenu.bak*' -exec rm -f {} \; || _rxb_failed=1
+    while IFS= read -r _rxb_file || [ -n "${_rxb_file}" ]; do
+        [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "${_rxb_list}"; say 'Очистка прервана; оставшиеся бэкапы сохранены.'; return 130; }
+        [ -n "${_rxb_file}" ] || continue
+        if rm -f "${_rxb_file}" 2>/dev/null; then
+            :
+        else
+            _rxb_failed=1
+            say "${RED}Не удалось удалить: ${_rxb_file}${RESET}"
+        fi
+    done < "${_rxb_list}"
+    [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "${_rxb_list}"; say 'Очистка прервана; оставшиеся бэкапы сохранены.'; return 130; }
+    if [ -d "${BACKUP_DIR}" ]; then
+        find "${BACKUP_DIR}" -depth -type d -exec rmdir {} \; 2>/dev/null || :
+        rmdir "${BACKUP_DIR}" 2>/dev/null || :
     fi
-    if [ -d "$BACKUP_DIR" ]; then
-        rm -rf "$BACKUP_DIR" || _rxb_failed=1
-    fi
-    rm -f "$_rxb_list"
+    rm -f "${_rxb_list}"
     if [ "$_rxb_failed" -eq 0 ]; then
         say 'Резервные копии Xmenu удалены; действующий /opt/bin/xmenu сохранён.'
     else
@@ -3742,6 +3814,7 @@ remove_menu() {
 main() {
     configure_locale
     require_root || return 1
+    install_xmenu_command || :
     if [ "${1:-menu}" = update-xmenu ]; then
         update_xmenu_script
         return $?
@@ -3899,7 +3972,5 @@ install_xmenu_command() {
     say "${GREEN}Команда Xmenu установлена: /opt/bin/xmenu. После выхода из меню запускай командой xmenu.${RESET}"
     return 0
 }
-
-install_xmenu_command || :
 
 main "$@"
