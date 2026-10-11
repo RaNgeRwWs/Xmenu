@@ -2555,7 +2555,7 @@ start_component_status_refresh() {
         rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
         return 1
     }
-    ( sh /opt/bin/xmenu __refresh-component-cache "$$" ) </dev/null >/dev/null 2>&1 &
+    sh /opt/bin/xmenu __refresh-component-cache "$$" </dev/null >/dev/null 2>&1 &
     _scr_pid=$!
     printf '%s\n' "$_scr_pid" > "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :
     return 0
