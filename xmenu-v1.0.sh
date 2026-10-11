@@ -3944,10 +3944,14 @@ remove_components_menu() {
 
 remove_menu() {
     XMENU_REMOVED=0
-    if ! confirm 'Удалить только /opt/bin/xmenu и его задание автообновления?'; then return 1; fi
-    _remove_backups=0
-    confirm 'Удалить также конфигурацию xmenu (manifest-ы, кэш, бэкапы)?' && _remove_backups=1
-    _c="$ROOT_DIR/crontab.$$"
+    if [ "$(get_ui_lang)" = en ]; then
+        _remove_prompt='Delete Xmenu and all its files and components?'
+    else
+        _remove_prompt='Удалить xmenu и все его файлы и компоненты?'
+    fi
+    if ! confirm "$_remove_prompt"; then return 1; fi
+
+    _c="$ROOT_DIR/crontab.$"
     if command -v crontab >/dev/null 2>&1 && crontab -l > "$_c" 2>/dev/null; then
         grep -Fv '/opt/bin/xmenu sync' "$_c" > "$_c.next" || :
         if ! crontab "$_c.next"; then
@@ -3956,20 +3960,13 @@ remove_menu() {
             return 1
         fi
     fi
-    rm -f "$_c.next"
-    rm -f "$_c" /opt/bin/xmenu
-    # Всегда удаляем манифесты и маркеры Xmenu; бэкапы сохраняем без отдельного подтверждения.
-    rm -rf "$ROOT_DIR/manifests"
-    rm -f "$ROOT_DIR/xkeen-channel" "$ROOT_DIR"/first-run-* "$ROOT_DIR"/active-strategy-*
-    rm -f "$ROOT_DIR"/strategies.list "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/crontab.*
-    rm -f "$ROOT_DIR"/.base-ready
-    if [ "$_remove_backups" = 1 ]; then
-        rm -rf "$BACKUP_DIR"
-        rmdir "$ROOT_DIR" 2>/dev/null || :
-        say "${GREEN}Xmenu удалён вместе с конфигурацией и бэкапами. XKeen/nfqws2 сохранены.${RESET}"
-    else
-        say "${GREEN}Xmenu удалён. Бэкапы сохранены в $BACKUP_DIR; manifests и маркеры очищены.${RESET}"
-    fi
+    rm -f "$_c.next" "$_c"
+    rm -f /opt/bin/xmenu /opt/bin/xmenu.bak*
+    # Удаляем весь каталог, принадлежащий Xmenu: конфигурацию, манифесты,
+    # кэш, временные маркеры и резервные копии. Установленные отдельно
+    # компоненты (например, XKeen и nfqws2) этим действием не удаляются.
+    rm -rf "$ROOT_DIR"
+    say "${GREEN}Xmenu и все его служебные файлы, кэш и бэкапы удалены. XKeen/nfqws2 сохранены.${RESET}"
     XMENU_REMOVED=1
     return 0
 }
