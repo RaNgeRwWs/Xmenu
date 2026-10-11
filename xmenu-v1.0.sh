@@ -1644,9 +1644,9 @@ drop_missing_rkn_reference() {
     _dmr_ver=$2
     case "$_dmr_ver" in
         2) _dmr_list='/opt/etc/nfqws2/lists/rkn.list'
-           _dmr_path_esc='/opt/etc/nfqws2/lists/rkn\\.list' ;;
+           _dmr_path_esc='/opt/etc/nfqws2/lists/rkn\.list' ;;
         1) _dmr_list='/opt/etc/nfqws/rkn.list'
-           _dmr_path_esc='/opt/etc/nfqws/rkn\\.list' ;;
+           _dmr_path_esc='/opt/etc/nfqws/rkn\.list' ;;
         *) return 0 ;;
     esac
     [ -s "$_dmr_list" ] && return 0
@@ -1659,7 +1659,7 @@ drop_missing_rkn_reference() {
         return 0
     fi
 
-    _dmr_tmp="${_dmr_conf}.rkn-clean.$"
+    _dmr_tmp="${_dmr_conf}.rkn-clean.$$"
     _dmr_out="${_dmr_tmp}.out"
     rm -f "$_dmr_tmp" "$_dmr_out"
     cp -p "$_dmr_conf" "$_dmr_tmp" || { rm -f "$_dmr_tmp"; return 1; }
