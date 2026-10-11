@@ -85,18 +85,18 @@ Xmenu **не является самостоятельным VPN-протоко�
 Если в Entware установлен `curl`:
 
 ```sh
-mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
+mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && grep -q '^APP_VERSION=' /tmp/xmenu.sh && grep -q '^main()' /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S).$"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
 ```
 
 Если `curl` отсутствует, но есть `wget`, скачайте скрипт так:
 
 ```sh
-wget -O /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
+wget -O /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && grep -q '^APP_VERSION=' /tmp/xmenu.sh && grep -q '^main()' /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && mkdir -p /opt/bin && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S).$"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
 ```
 
 При первом запуске из другого пути Xmenu также пытается установить копию самого себя в `/opt/bin/xmenu`, чтобы в дальнейшем его можно было открывать короткой командой.
 
-> **Примечание.** Для последующих обновлений предпочтительно использовать встроенный пункт меню **23 — «Обновить Xmenu с GitHub»**. При повторной ручной установке файл `/opt/bin/xmenu.bak` может быть перезаписан приведённой выше командой.
+> **Примечание.** Для последующих обновлений предпочтительно использовать встроенный пункт меню **23 — «Обновить Xmenu с GitHub»**. При повторной ручной установке команда сохраняет прежний скрипт под именем с временной меткой и PID, чтобы не перезаписать обычную предыдущую копию.
 
 ## ▶️ Запуск и обновление
 
