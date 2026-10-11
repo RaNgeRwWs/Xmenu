@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.2.3 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.2.3"
+# Xmenu ◆ v1.2.1 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.2.1"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
