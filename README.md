@@ -37,43 +37,6 @@ curl -fLsS --retry 3 --connect-timeout 8 --max-time 90 \
 wget -O /tmp/xmenu.sh \
   https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
 ```
-
-Если загрузка завершилась ошибкой, не переходите к установке: проверьте интернет, DNS и доступ к GitHub.
-
-### Шаг 2. Проверить, установить и запустить
-
-Выполните этот блок **после успешного скачивания**. Он проверит файл, создаст резервную копию предыдущего Xmenu, установит скрипт атомарной заменой и откроет меню.
-
-```sh
-set -e
-
-test -s /tmp/xmenu.sh
-test "$(wc -c < /tmp/xmenu.sh | tr -d ' ')" -ge 25000
-grep -q '^APP_VERSION=' /tmp/xmenu.sh
-grep -q '^main "\$@"' /tmp/xmenu.sh
-sh -n /tmp/xmenu.sh
-
-mkdir -p /opt/bin
-
-if [ -f /opt/bin/xmenu ]; then
-    _backup="/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)-$$"
-    cp -p /opt/bin/xmenu "$_backup"
-    echo "Резервная копия: $_backup"
-fi
-
-_tmp="/opt/bin/.xmenu-install.$$"
-cp /tmp/xmenu.sh "$_tmp"
-chmod 700 "$_tmp"
-mv -f "$_tmp" /opt/bin/xmenu
-
-rm -f /tmp/xmenu.sh
-echo "Xmenu установлен: /opt/bin/xmenu"
-
-/opt/bin/xmenu
-```
-
-Если проверка размера, структуры или синтаксиса не пройдёт, set -e остановит блок до замены установленного файла. Старая версия при этом останется на месте.
-
 ---
 
 ## ▶️ Как запустить Xmenu после установки
