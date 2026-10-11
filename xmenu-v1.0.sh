@@ -310,7 +310,7 @@ _read_or_eof() {
 # Подтверждение с ответом «да» по умолчанию; неверный ответ вызывает повтор вопроса.
 confirm_yes() {
     while :; do
-        _read_or_eof "${YELLOW}${1:-Продолжить?} [Y/n]: ${RESET}" || return 1
+        _read_or_eof "${YELLOW}${1:-Продолжить?} [Y/n]: ${RESET}" || return 0
         case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
             ''|y|yes|да|д|true|1) return 0 ;;
             n|no|нет|н|false|0) return 1 ;;
