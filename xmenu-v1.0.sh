@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.0"
+# Xmenu ◆ v1.0.5 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.0.5"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -28,10 +28,28 @@ MENU_READING=0
 _LAST_MENU_INTERRUPT_TS=0
 _FETCH_FAIL_COUNT=0
 cleanup() {
+    _cleanup_mode=${1:-release}
+    if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ]; then
+        case "$_OPKG_RENDER_CACHE_FILE" in "$ROOT_DIR"/.opkg-installed.*) rm -f "$_OPKG_RENDER_CACHE_FILE" ;; esac
+        _OPKG_RENDER_CACHE_FILE=''
+    fi
     if [ -n "$WORK" ] && [ "$WORK" != / ] && [ -d "$WORK" ]; then
         case "$WORK" in "$ROOT_DIR"/*|/tmp/xmenu-*) rm -rf "$WORK" ;; esac
     fi
     WORK=""
+    # Some operations call cleanup() only to release the lock. Keep session caches
+    # in that case; at process exit remove this PID's /tmp files and Xmenu work artifacts.
+    if [ "$_cleanup_mode" = final ]; then
+        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
+            "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* \
+            "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* \
+            "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized \
+            "$ROOT_DIR"/install-xkeen-stable-auto."$$" \
+            "$ROOT_DIR"/.components-installed.* "$ROOT_DIR"/.opkg-installed.*; do
+            [ -e "$_cleanup_path" ] || [ -L "$_cleanup_path" ] || continue
+            case "$_cleanup_path" in /tmp/xmenu-*|"$ROOT_DIR"/*) rm -rf "$_cleanup_path" 2>/dev/null || : ;; esac
+        done
+    fi
     if [ "$LOCK_HELD" = 1 ] && [ -d "$LOCK_DIR" ]; then
         _cleanup_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || :)
         if [ "$_cleanup_pid" = "$$" ]; then
@@ -61,6 +79,8 @@ on_int() {
 on_exit_signal() { cleanup; exit 130; }
 trap 'on_int' INT
 trap 'on_exit_signal' TERM HUP
+# POSIX exit trap guarantees final temporary-file cleanup for both menu and CLI modes.
+trap 'cleanup final' 0
 
 if [ -t 1 ]; then
     RESET=$(printf '\033[0m'); PURPLE=$(printf '\033[35m'); LAVENDER=$(printf '\033[95m'); WHITE=$(printf '\033[97m')
@@ -69,6 +89,14 @@ else
     RESET=''; PURPLE=''; LAVENDER=''; WHITE=''; MUTED=''; GREEN=''; YELLOW=''; RED=''; BRIGHT_RED=''; CYAN=''
 fi
 say() { printf '%s\n' "$*"; }
+
+# Portable response-page check: inspect only the first few lines.
+# Match HTML and explicit HTTP error-page markers, not generic words like "Not Found":
+# those can legitimately occur in shell comments or the first lines of domain lists.
+response_looks_like_error_page() {
+    [ -f "$1" ] || return 1
+    sed -n '1,8p' "$1" 2>/dev/null | grep -qiE '<html([[:space:]>])|<!doctype[[:space:]]+html|^[[:space:]]*404:[[:space:]]*not found[[:space:]]*$|^[[:space:]]*404 not found[[:space:]]*$|^[[:space:]]*502 bad gateway[[:space:]]*$|^[[:space:]]*503 service unavailable[[:space:]]*$'
+}
 
 get_ui_lang() {
     _lang=$(cat "$LANG_FILE" 2>/dev/null | tr -d '[:space:]')
@@ -98,7 +126,7 @@ run_remote_installer() {
     fi
     _ri_size=$(wc -c < "$_ri_tmp" 2>/dev/null | tr -d ' ')
     case "$_ri_size" in ''|*[!0-9]*) _ri_size=0 ;; esac
-    if [ "$_ri_size" -lt "$_ri_min" ] || head -c 256 "$_ri_tmp" 2>/dev/null | grep -qiE '<html|404: Not Found|Bad Gateway|Not Found'; then
+    if [ "$_ri_size" -lt "$_ri_min" ] || response_looks_like_error_page "$_ri_tmp"; then
         rm -f "$_ri_tmp"
         say "${RED}Загруженный файл слишком мал или похож на страницу ошибки; запуск отменён.${RESET}"
         return 1
@@ -253,16 +281,6 @@ auto_yes_enabled() {
 }
 
 # Неблокирующая очистка уже ожидающей строки stdin; при отсутствии поддержки -t сразу выходим.
-drain_stdin() {
-    [ -t 0 ] || return 0
-    _drain_count=0
-    while [ "$_drain_count" -lt 32 ]; do
-        IFS= read -r -t 0 _drain_line 2>/dev/null || break
-        IFS= read -r _drain_line 2>/dev/null || break
-        _drain_count=$((_drain_count + 1))
-    done
-    return 0
-}
 
 # During menu rendering, one opkg snapshot avoids spawning `opkg` repeatedly for every row.
 # Outside rendering the original live lookup is retained so install/remove actions see fresh state.
@@ -359,10 +377,26 @@ fetch_url_candidates() {
             _candidate_rest=${_candidate_url#https://raw.githubusercontent.com/}
             _candidate_owner=${_candidate_rest%%/*}; _candidate_rest=${_candidate_rest#*/}
             _candidate_repo=${_candidate_rest%%/*}; _candidate_rest=${_candidate_rest#*/}
-            _candidate_ref=${_candidate_rest%%/*}; _candidate_path=${_candidate_rest#*/}
+            # Explicit revision URLs contain refs/heads/<branch>/ or refs/tags/<tag>/.
+            # Consume all three leading path segments before separating the file path.
+            case "$_candidate_rest" in
+                refs/heads/*)
+                    _candidate_rest=${_candidate_rest#refs/heads/}
+                    _candidate_ref=${_candidate_rest%%/*}
+                    _candidate_path=${_candidate_rest#*/}
+                    ;;
+                refs/tags/*)
+                    _candidate_rest=${_candidate_rest#refs/tags/}
+                    _candidate_ref=${_candidate_rest%%/*}
+                    _candidate_path=${_candidate_rest#*/}
+                    ;;
+                *)
+                    _candidate_ref=${_candidate_rest%%/*}
+                    _candidate_path=${_candidate_rest#*/}
+                    ;;
+            esac
             printf '%s\n' "$_candidate_url"
             if [ -n "$_candidate_owner" ] && [ -n "$_candidate_repo" ] && [ -n "$_candidate_ref" ] && [ -n "$_candidate_path" ]; then
-                case "$_candidate_ref" in refs/heads/*) _candidate_ref=${_candidate_ref#refs/heads/} ;; refs/tags/*) _candidate_ref=${_candidate_ref#refs/tags/} ;; esac
                 printf '%s\n' "https://fastly.jsdelivr.net/gh/$_candidate_owner/$_candidate_repo@$_candidate_ref/$_candidate_path"
                 printf '%s\n' "https://cdn.jsdelivr.net/gh/$_candidate_owner/$_candidate_repo@$_candidate_ref/$_candidate_path"
                 printf '%s\n' "https://ghproxy.net/$_candidate_url"
@@ -411,7 +445,7 @@ fetch() {
                 [ -s "$_fetch_out" ] && _fetch_ok=1
             fi
         fi
-        if [ "$_fetch_ok" -eq 1 ] && ! head -c 256 "$_fetch_out" 2>/dev/null | grep -qiE '404: Not Found|502 Bad Gateway|503 Service Unavailable'; then
+        if [ "$_fetch_ok" -eq 1 ] && ! response_looks_like_error_page "$_fetch_out"; then
             _FETCH_FAIL_COUNT=0
             return 0
         fi
@@ -427,7 +461,8 @@ normalize_arch() {
     # uname -m используется только как fallback; ARM 32-bit не выдаём за aarch64.
     case "$1" in
         aarch64*|arm64*) echo aarch64 ;;
-        armv7*|armv6*|arm*) echo '' ;;
+        armv7*|armhf*) echo armv7 ;;
+        armv6*|arm*) echo '' ;;
         mipsel*|mipselsf*|mips64el*) echo mipsel ;;
         mips*|mipssf*) echo mips ;;
         x86_64*|amd64*|x64*) echo x86_64 ;;
@@ -436,7 +471,7 @@ normalize_arch() {
     esac
 }
 _arch_pick_best() {
-    awk '$1=="arch" && $2!="" && $2!="all" && $2!="noarch" {p=$3+0; n=$2; bonus=0; if(n~/^mipsel/ || n~/^mipselsf/ || n~/^mips64el/ || n~/^aarch64/ || n~/^arm64/)bonus=2; score=p*10+bonus; if(score>best){best=score; name=n}} END{if(name!="")print name}'
+    awk '$1=="arch" && $2!="" && $2!="all" && $2!="noarch" {p=$3+0; n=$2; bonus=0; if(n~/^mipsel/ || n~/^mipselsf/ || n~/^mips64el/ || n~/^aarch64/ || n~/^arm64/ || n~/^armv7/ || n~/^armhf/)bonus=2; score=p*10+bonus; if(score>best){best=score; name=n}} END{if(name!="")print name}'
 }
 _arch_from_opkg_conf() {
     _conf="${1:-/opt/etc/opkg.conf}"
@@ -452,6 +487,7 @@ _arch_from_opkg_conf() {
                     *mipssf*) echo mipssf; return 0 ;;
                     *mipsel*) echo mipsel; return 0 ;;
                     *aarch64*|*arm64*) echo aarch64; return 0 ;;
+                    *armv7*|*armhf*) echo armv7; return 0 ;;
                     *x86_64*|*/x64*) echo x86_64; return 0 ;;
                     *i386*|*/x86*) echo x86; return 0 ;;
                     *mips*) echo mips; return 0 ;;
@@ -557,6 +593,43 @@ backup_configs() {
     say "${GREEN}Бэкап: $_archive${RESET}"
 }
 
+# Обновляют только NFQWS-пакет без повторного запуска интерактивных
+# миграций/проверок установки. Используется в install_all_missing(), когда
+# пакет уже установлен; opkg update всегда выполняется перед opkg upgrade.
+upgrade_nfqws2_package() {
+    require_opkg || return 1
+    ensure_network || return 1
+    _up_arch=$(get_arch) || { say "${RED}Не удалось определить архитектуру Entware.${RESET}"; return 1; }
+    case "$_up_arch" in aarch64|armv7|mipsel|mips|x86_64|x86) ;; *) say "${RED}Не удалось надёжно определить архитектуру Entware.${RESET}"; return 1;; esac
+    opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
+    mkdir -p /opt/etc/opkg || return 1
+    printf 'src/gz nfqws2-keenetic %s/%s\n' "$NFQWS2_REPO_BASE" "$_up_arch" > /opt/etc/opkg/nfqws2-keenetic.conf || return 1
+    opkg update || return 1
+    if is_installed nfqws2-keenetic; then
+        say 'nfqws2 уже установлен: проверяю и устанавливаю обновление пакета.'
+        opkg upgrade nfqws2-keenetic
+    else
+        say "${YELLOW}nfqws2 больше не числится установленным; выполняю установку.${RESET}"
+        opkg install nfqws2-keenetic
+    fi
+}
+
+upgrade_nf_web_package() {
+    require_opkg || return 1
+    ensure_network || return 1
+    opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
+    mkdir -p /opt/etc/opkg || return 1
+    printf 'src/gz nfqws-keenetic-web %s\n' "$NFQWS_WEB_REPO" > /opt/etc/opkg/nfqws-keenetic-web.conf || return 1
+    opkg update || return 1
+    if is_installed nfqws-keenetic-web; then
+        say 'nfqws-keenetic-web уже установлен: проверяю и устанавливаю обновление пакета.'
+        opkg upgrade nfqws-keenetic-web
+    else
+        say "${YELLOW}nfqws-keenetic-web больше не числится установленным; выполняю установку.${RESET}"
+        opkg install nfqws-keenetic-web
+    fi
+}
+
 install_nfqws2() {
     line; say "${CYAN}nfqws2${RESET} — движок обхода DPI"
     ensure_network || return 1
@@ -622,17 +695,60 @@ install_nf_web() {
     if is_installed nfqws-keenetic-web; then opkg upgrade nfqws-keenetic-web; else opkg install nfqws-keenetic-web; fi
 }
 install_nf_web2() {
-    # БЕЗОПАСНОСТЬ: скачиваемый скрипт не имеет независимой криптографической проверки.
-    # Закрепление URL за commit SHA — задача v2.5.0.
-    line; say "${CYAN}nfqws-ui${RESET}"
-    ensure_network || return 1
-    is_installed nfqws2-keenetic || { say 'Сначала установи nfqws2.'; return 1; }
-    _tmp="$ROOT_DIR/nfqws2-ui-install.$$"
-    fetch "$NFQWS2_UI_INSTALLER" "$_tmp" || { rm -f "$_tmp"; say 'Не удалось скачать установщик.'; return 1; }
-    grep -qi 'nfqws2-ui' "$_tmp" && grep -qi 'sha256' "$_tmp" && sh -n "$_tmp" || { rm -f "$_tmp"; say 'Проверка установщика не пройдена.'; return 1; }
-    if [ -r /dev/tty ]; then sh "$_tmp" </dev/tty; else sh "$_tmp"; fi
-    _rc=$?; rm -f "$_tmp"; drain_stdin; return "$_rc"
+    line; say "${CYAN}nfqws-ui (nfqws2-ui)${RESET}"
+    require_opkg || return 1
+    if ! is_installed nfqws2-keenetic; then
+        say 'Сначала установи nfqws2 (пункт 4).'
+        return 1
+    fi
+
+    # Official upstream command: nfqws-ui update (nfqws-ui-setup is its full name).
+    # Check package AND utility, since older installations may have no short alias.
+    if is_installed nfqws2-ui || is_installed nfqws-ui || \
+       command -v nfqws-ui >/dev/null 2>&1 || \
+       [ -x /opt/sbin/nfqws-ui-setup ] || [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
+        say 'Обнаружен nfqws-ui. Запускаю официальное обновление...'
+        if command -v nfqws-ui >/dev/null 2>&1; then
+            if [ -r /dev/tty ]; then nfqws-ui update </dev/tty; else nfqws-ui update; fi
+        elif command -v nfqws-ui-setup >/dev/null 2>&1; then
+            if [ -r /dev/tty ]; then nfqws-ui-setup update </dev/tty; else nfqws-ui-setup update; fi
+        elif [ -x /opt/sbin/nfqws-ui-setup ]; then
+            if [ -r /dev/tty ]; then /opt/sbin/nfqws-ui-setup update </dev/tty; else /opt/sbin/nfqws-ui-setup update; fi
+        elif [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
+            if [ -r /dev/tty ]; then /opt/usr/sbin/nfqws-ui-setup update </dev/tty; else /opt/usr/sbin/nfqws-ui-setup update; fi
+        else
+            say 'Пакет обнаружен, но команда обновления отсутствует. Восстанови штатную утилиту пакета.'
+            return 1
+        fi
+        _nfui_rc=$?
+        [ "$_nfui_rc" -eq 0 ] || say "${RED}Обновление nfqws-ui завершилось с кодом $_nfui_rc.${RESET}"
+        return "$_nfui_rc"
+    fi
+
+    # Official upstream install.sh, downloaded to a file rather than piped into
+    # an interactive shell. No modification of the vendor's installer.
+    _nfui_tmp="/tmp/xmenu-nfqws-ui-install-$$.sh"
+    _nfui_url='https://github.com/zemidala/nfqws2-ui/releases/latest/download/install.sh'
+    rm -f "$_nfui_tmp"
+    say 'nfqws-ui не установлен. Загружаю официальный установщик...'
+    if ! fetch "$_nfui_url" "$_nfui_tmp" 120; then
+        rm -f "$_nfui_tmp"
+        say 'Не удалось скачать официальный установщик nfqws-ui с основного адреса и зеркал.'
+        return 1
+    fi
+    if [ ! -s "$_nfui_tmp" ] || response_looks_like_error_page "$_nfui_tmp" || ! sh -n "$_nfui_tmp"; then
+        rm -f "$_nfui_tmp"
+        say 'Официальный установщик пуст или содержит синтаксическую ошибку.'
+        return 1
+    fi
+    say 'Запускаю официальный install.sh...'
+    if [ -r /dev/tty ]; then sh "$_nfui_tmp" </dev/tty; else sh "$_nfui_tmp"; fi
+    _nfui_rc=$?
+    rm -f "$_nfui_tmp"
+    [ "$_nfui_rc" -eq 0 ] || say "${RED}Установка nfqws-ui завершилась с кодом $_nfui_rc.${RESET}"
+    return "$_nfui_rc"
 }
+
 require_space() {
     _needed_kb="$1"
     _avail=$(df -Pk /opt 2>/dev/null | awk 'NR==2 {print $4; exit}')
@@ -688,14 +804,20 @@ install_xkeen_stable_binary() {
     _src="$ROOT_DIR/install-xkeen-upstream.$$"
     _auto="$ROOT_DIR/install-xkeen-stable-auto.$$"
     fetch "$XKEEN_INSTALLER" "$_src" || { rm -f "$_src"; say "${RED}Не скачан официальный XKeen install.sh.${RESET}"; return 1; }
-    grep -q 'url_stable=' "$_src" && grep -q 'exec /opt/sbin/xkeen -i' "$_src" && sh -n "$_src" || {
+    # Normalize CRLF before inspecting or rewriting the downloaded shell script.
+    _src_norm="${_src}.normalized"
+    tr -d '\r' < "$_src" > "$_src_norm" && mv -f "$_src_norm" "$_src" || {
+        rm -f "$_src" "$_src_norm"; say "${RED}Не удалось нормализовать официальный установщик XKeen.${RESET}"; return 1;
+    }
+    grep -q 'url_stable=' "$_src" && grep -Eq '^[[:space:]]*exec[[:space:]]+/opt/sbin/xkeen[[:space:]]+-i[[:space:]]*$' "$_src" && sh -n "$_src" || {
         rm -f "$_src"; say "${RED}Структура официального установщика изменилась; запуск отменён.${RESET}"; return 1;
     }
-    # Оставляем официальный Stable-загрузчик и проверку архива, но пропускаем его интерактивный первый -i.
-    sed 's#^exec /opt/sbin/xkeen -i$#exit 0#' "$_src" > "$_auto" || { rm -f "$_src" "$_auto"; return 1; }
-    grep -q '^exit 0$' "$_auto" && ! grep -q '^exec /opt/sbin/xkeen -i$' "$_auto" && sh -n "$_auto" || {
+    # Keep the official Stable downloader/archive validation, but skip its interactive first -i.
+    sed 's#^[[:space:]]*exec[[:space:]][[:space:]]*/opt/sbin/xkeen[[:space:]][[:space:]]*-i[[:space:]]*$#exit 0#' "$_src" > "$_auto" || { rm -f "$_src" "$_auto"; return 1; }
+    if grep -Eq '^[[:space:]]*exec[[:space:]]+/opt/sbin/xkeen[[:space:]]+-i[[:space:]]*$' "$_auto" || \
+       ! grep -q '^exit 0$' "$_auto" || ! sh -n "$_auto"; then
         rm -f "$_src" "$_auto"; say "${RED}Не удалось подготовить неинтерактивный запуск Stable-инсталлятора.${RESET}"; return 1;
-    }
+    fi
     say 'Устанавливаю XKeen из официального Stable-релиза...'
     mkdir -p /opt/tmp || { say "${RED}Не удалось создать /opt/tmp.${RESET}"; rm -f "$_src" "$_auto"; return 1; }
     (cd /opt/tmp && sh "$_auto" --stable)
@@ -902,7 +1024,7 @@ install_xkeen_ui() {
     grep -q 'XKEENUI_BIN=' "$_tmp" && sh -n "$_tmp" || { rm -f "$_tmp"; say 'Проверка установщика XKeen UI не пройдена.'; return 1; }
     say 'В штатном меню выбери 1 для установки или 2 для обновления.'
     if [ -r /dev/tty ]; then sh "$_tmp" </dev/tty; else sh "$_tmp"; fi
-    _rc=$?; rm -f "$_tmp"; drain_stdin; return "$_rc"
+    _rc=$?; rm -f "$_tmp"; return "$_rc"
 }
 
 
@@ -1076,16 +1198,21 @@ install_all_missing() {
     _failed=0
     [ "${INTERRUPTED:-0}" = 0 ] || { : > "$ROOT_DIR/first-run-attempted"; say 'Первичная установка прервана.'; return 130; }
 
-    if is_installed nfqws2-keenetic; then say 'nfqws2 уже установлен — пропуск.'
+    # Для этих двух opkg-пакетов повторный запуск install-all обновляет уже
+    # установленную версию (opkg update + opkg upgrade), а не просто пропускает её.
+    if is_installed nfqws2-keenetic; then
+        _install_all_step 'Обновление nfqws2' upgrade_nfqws2_package; _rc=$?
     else
-        _install_all_step 'nfqws2' install_nfqws2; _rc=$?
-        case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
+        _install_all_step 'Установка nfqws2' install_nfqws2; _rc=$?
     fi
-    if is_installed nfqws-keenetic-web; then say 'Оригинальная NFQWS Web уже установлена — пропуск.'
+    case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
+
+    if is_installed nfqws-keenetic-web; then
+        _install_all_step 'Обновление nfqws-keenetic-web' upgrade_nf_web_package; _rc=$?
     else
-        _install_all_step 'Оригинальная NFQWS Web' install_nf_web; _rc=$?
-        case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
+        _install_all_step 'Установка nfqws-keenetic-web' install_nf_web; _rc=$?
     fi
+    case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
     _install_all_step 'XKeen Auto' install_xkeen_auto; _rc=$?
     case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
     if [ -x /opt/sbin/xkeen-ui ]; then say 'XKeen UI уже установлен — пропуск.'
@@ -1104,10 +1231,16 @@ install_all_missing() {
     else
         say 'zemidala/nfqws2-ui пропущен: подтверждение не получено или установка отклонена.'
     fi
-    if [ -x /opt/bin/dpi-detector ]; then say 'DPI Detector уже установлен — пропуск.'
+    if [ -x /opt/bin/dpi-detector ]; then
+        say 'DPI Detector уже установлен — пропуск.'
     else
-        _install_all_step 'DPI Detector' install_dpi_detector; _rc=$?
-        case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
+        _all_arch=$(get_arch 2>/dev/null || :)
+        if [ "$_all_arch" != aarch64 ]; then
+            say "${YELLOW}DPI Detector доступен только для aarch64 — пропуск (обнаружено: ${_all_arch:-архитектура не определена}).${RESET}"
+        else
+            _install_all_step 'DPI Detector' install_dpi_detector; _rc=$?
+            case "$_rc" in 0) : ;; 130) return 130 ;; *) _failed=1 ;; esac
+        fi
     fi
     if [ "${INTERRUPTED:-0}" != 0 ]; then : > "$ROOT_DIR/first-run-attempted"; say 'Первичная установка прервана.'; return 130; fi
     if [ "$_failed" -eq 0 ]; then
@@ -1237,14 +1370,16 @@ sync_strategies() {
 
 # Извлекаем абсолютные пути к blobs/lists так же, как nfqws-menu: учитываем @/path и =/path.
 extract_blob_paths() {
-    grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | tr ' \t' '\n' |
-        sed -n -e 's/.*@\(\/[^[:space:]"]*\.bin\).*/\1/p' \
-               -e 's/.*=\(\/[^[:space:]"]*\.bin\).*/\1/p' | sort -u
+    # A path may be written as --option="/path/file.bin" or --option='/path/file.bin'.
+    # Strip only quote characters from tokenized arguments before extracting paths.
+    grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | sed "s/[\"']//g" | tr ' \t' '\n' |
+        sed -n -e 's/.*@\(\/[^[:space:]]*\.bin\).*/\1/p' \
+               -e 's/.*=\(\/[^[:space:]]*\.bin\).*/\1/p' | sort -u
 }
 extract_list_paths() {
-    grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | tr ' \t' '\n' |
-        sed -n -e 's/.*[=:]\(\/[^[:space:]"]*\.list\).*/\1/p' \
-               -e 's/^\(\/[^[:space:]"]*\.list\)$/\1/p' | sort -u
+    grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | sed "s/[\"']//g" | tr ' \t' '\n' |
+        sed -n -e 's/.*[=:]\(\/[^[:space:]]*\.list\).*/\1/p' \
+               -e 's/^\(\/[^[:space:]]*\.list\)$/\1/p' | sort -u
 }
 
 # Проверяем и скачиваем blobs активной конфигурации по SHA-256 из манифеста.
@@ -1692,7 +1827,7 @@ XMENU_STRATEGY_ORDER
         sed "s|^[[:space:]]*ISP_INTERFACE=.*|ISP_INTERFACE=\"$_if\"|" "$_tmp" > "$_tmp.norm" && mv "$_tmp.norm" "$_tmp"
     fi
     sed 's/\r$//' "$_tmp" > "$_tmp.norm" && mv "$_tmp.norm" "$_tmp"
-    case "$_ver" in 2) preserve_rkn_hostlist "$_conf" "$_tmp" 2 || { rm -f "$_tmp" "$_tmp.norm"; return 1; } ;; 1) preserve_rkn_hostlist "$_conf" "$_tmp" 1 || { rm -f "$_tmp" "$_tmp.norm"; return 1; } ;; esac
+    case "$_ver" in 2) preserve_rkn_hostlist "$_conf" "$_tmp" 2 || : ;; 1) preserve_rkn_hostlist "$_conf" "$_tmp" 1 || : ;; esac
     say "Выбрана стратегия: $_name"
     say 'Будет создан бэкап; сначала проверю/доустановлю нужные blobs, затем заменю конфиг и перезапущу NFQWS.'
     if confirm 'Применить стратегию?'; then
@@ -1754,6 +1889,8 @@ preserve_rkn_hostlist() {
     awk -v host="--hostlist=$_pr_list" '
         /^[[:space:]]*MODE_LIST[[:space:]]*=/ {
             if (index($0, host) > 0) { print; found=1; next }
+            # Only append when MODE_LIST is a one-line double-quoted value.
+            # Unknown formats are left intact instead of risking a bad config edit.
             if ($0 ~ /"[[:space:]]*$/) {
                 sub(/"[[:space:]]*$/, " " host "\"")
                 print; found=1; next
@@ -1763,10 +1900,14 @@ preserve_rkn_hostlist() {
         END { if (!found) exit 3 }
     ' "$_pr_new" > "$_pr_tmp" || {
         rm -f "$_pr_tmp"
-        say "${YELLOW}В конфиге стратегии не удалось найти MODE_LIST; привязка rkn.list не менялась.${RESET}"
-        return 1
+        say "${YELLOW}Не удалось безопасно изменить MODE_LIST; привязка rkn.list не менялась, применение стратегии продолжится.${RESET}"
+        return 0
     }
-    mv "$_pr_tmp" "$_pr_new" || { rm -f "$_pr_tmp"; return 1; }
+    if ! mv "$_pr_tmp" "$_pr_new"; then
+        rm -f "$_pr_tmp"
+        say "${YELLOW}Не удалось сохранить автоматическую привязку rkn.list; применение стратегии продолжится без неё.${RESET}"
+        return 0
+    fi
     say "${GREEN}Сохранил привязку rkn.list в MODE_LIST.${RESET}"
     return 0
 }
@@ -1812,7 +1953,7 @@ apply_marked_active_strategy() {
         sed "s|^[[:space:]]*ISP_INTERFACE=.*|ISP_INTERFACE=\"$_if\"|" "$_tmpconf" > "$_tmpconf.norm" && mv "$_tmpconf.norm" "$_tmpconf" || { rm -f "$_tmpconf" "$_tmpconf.norm"; return 1; }
     fi
     sed 's/\r$//' "$_tmpconf" > "$_tmpconf.norm" && mv "$_tmpconf.norm" "$_tmpconf" || { rm -f "$_tmpconf" "$_tmpconf.norm"; return 1; }
-    preserve_rkn_hostlist "$_conf" "$_tmpconf" "$_ver" || { rm -f "$_tmpconf" "$_tmpconf.norm"; return 1; }
+    preserve_rkn_hostlist "$_conf" "$_tmpconf" "$_ver" || :
     _old_sum=$(sha256_file "$_conf") || _old_sum=''
     _new_sum=$(sha256_file "$_tmpconf") || _new_sum=''
     if [ -n "$_old_sum" ] && [ "$_old_sum" = "$_new_sum" ]; then rm -f "$_tmpconf"; return 0; fi
@@ -1847,7 +1988,7 @@ sync_active_blobs() {
         esac
         if [ "$_pre_ver" != 0 ]; then
             _pre_marker="$ROOT_DIR/active-strategy-nfqws$_pre_ver"
-            _pre_name=$(sed -n '1{s/\\r$//;p;}' "$_pre_marker" 2>/dev/null)
+            _pre_name=$(tr -d '\r' < "$_pre_marker" 2>/dev/null | sed -n '1p')
             case "$_pre_name" in ''|.|..|*/*|*..*|*[!A-Za-z0-9_.+-]*) _pre_name='' ;; esac
             if [ -n "$_pre_name" ] && [ -f "$CACHE_DIR/nfqws$_pre_ver/$_pre_name" ] &&
                strategy_configs_equal "$_pre_conf" "$CACHE_DIR/nfqws$_pre_ver/$_pre_name"; then
@@ -2036,28 +2177,58 @@ get_xkeen_ui_version() {
 }
 
 get_xray_version() {
+    _xray_cache="/tmp/xmenu-xray-version-$$"
+    if [ -s "$_xray_cache" ]; then cat "$_xray_cache"; return 0; fi
     _bin=$(command -v xray 2>/dev/null)
+    [ -n "$_bin" ] && [ -x "$_bin" ] || _bin=''
     [ -n "$_bin" ] || { [ -x /opt/bin/xray ] && _bin=/opt/bin/xray; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/xray ] && _bin=/opt/sbin/xray; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/.xkeen/xray ] && _bin=/opt/sbin/.xkeen/xray; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/.xkeen/bin/xray ] && _bin=/opt/sbin/.xkeen/bin/xray; }
-    [ -n "$_bin" ] || { _bin=$(find /opt/sbin/.xkeen -maxdepth 4 -type f -name xray -perm -111 2>/dev/null | head -n 1); }
-    [ -n "$_bin" ] || { echo 'не найден'; return; }
-    _v=$("$_bin" version 2>&1 | head -n 1)
-    printf '%s' "${_v:-версия не сообщена}"
+    if [ -z "$_bin" ] && [ -d /opt/sbin/.xkeen ]; then
+        _xray_candidates=$(find /opt/sbin/.xkeen -type f -name xray 2>/dev/null)
+        for _candidate in $_xray_candidates; do [ -x "$_candidate" ] && { _bin=$_candidate; break; }; done
+    fi
+    [ -n "$_bin" ] || {
+        printf '%s\n' 'не найден' > "$_xray_cache" 2>/dev/null || :
+        printf '%s' 'не найден'
+        return 0
+    }
+    _v=$("$_bin" version 2>&1 | sed -n '1p')
+    _v=${_v:-версия не сообщена}
+    printf '%s\n' "$_v" > "$_xray_cache" 2>/dev/null || :
+    printf '%s' "$_v"
 }
 
 get_mihomo_version() {
+    _mihomo_cache="/tmp/xmenu-mihomo-version-$$"
+    if [ -s "$_mihomo_cache" ]; then cat "$_mihomo_cache"; return 0; fi
     _bin=$(command -v mihomo 2>/dev/null)
+    [ -n "$_bin" ] && [ -x "$_bin" ] || _bin=''
     [ -n "$_bin" ] || { [ -x /opt/bin/mihomo ] && _bin=/opt/bin/mihomo; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/mihomo ] && _bin=/opt/sbin/mihomo; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/.xkeen/mihomo ] && _bin=/opt/sbin/.xkeen/mihomo; }
     [ -n "$_bin" ] || { [ -x /opt/sbin/.xkeen/bin/mihomo ] && _bin=/opt/sbin/.xkeen/bin/mihomo; }
-    [ -n "$_bin" ] || { _bin=$(find /opt/sbin/.xkeen -maxdepth 4 -type f -name mihomo -perm -111 2>/dev/null | head -n 1); }
-    [ -n "$_bin" ] || { echo 'не найден'; return; }
-    _v=$("$_bin" -v 2>&1 | head -n 1)
-    printf '%s' "${_v:-версия не сообщена}"
+    if [ -z "$_bin" ] && [ -d /opt/sbin/.xkeen ]; then
+        _mihomo_candidates=$(find /opt/sbin/.xkeen -type f -name mihomo 2>/dev/null)
+        for _candidate in $_mihomo_candidates; do [ -x "$_candidate" ] && { _bin=$_candidate; break; }; done
+    fi
+    [ -n "$_bin" ] || {
+        printf '%s\n' 'не найден' > "$_mihomo_cache" 2>/dev/null || :
+        printf '%s' 'не найден'
+        return 0
+    }
+    _v=$("$_bin" -v 2>&1 | sed -n '1p')
+    _v=${_v:-версия не сообщена}
+    printf '%s\n' "$_v" > "$_mihomo_cache" 2>/dev/null || :
+    printf '%s' "$_v"
 }
+
+# Called after install/update/remove actions which can change a core binary.
+invalidate_core_version_cache() {
+    rm -f "/tmp/xmenu-xray-version-$$" "/tmp/xmenu-mihomo-version-$$" "/tmp/xmenu-dpi-version-$$"
+}
+
 print_component() {
     _pc_label=$1
     _pc_installed=$2
@@ -2110,17 +2281,23 @@ render_component_statuses() {
     [ -n "$_nfui_version" ] || _nfui_version=$(pkg_version nfqws-ui)
     print_component 'nfqws-ui' "$_nfui_installed" "${_nfui_version:-неизвестна}"
     if [ -x /opt/bin/dpi-detector ]; then
-        _dpi_probe=$(sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
-        _dpi_probe_rc=$?
-        _dpi_v=$(printf '%s\n' "$_dpi_probe" | head -n 1)
-        if [ "$_dpi_probe_rc" -eq 0 ] && [ -n "$_dpi_v" ]; then
-            printf '%s\n' "$_dpi_v" > "$ROOT_DIR/dpi-detector-version" 2>/dev/null || :
-            rm -f "$ROOT_DIR/dpi-detector-native-incompatible" "$ROOT_DIR/dpi-detector-python-mode"
-        elif [ "$_dpi_probe_rc" -eq 126 ] || [ "$_dpi_probe_rc" -eq 127 ] ||
-             [ -f "$ROOT_DIR/dpi-detector-native-incompatible" ]; then
-            _dpi_v='ELF несовместим с Entware'
+        _dpi_cache="/tmp/xmenu-dpi-version-$$"
+        if [ -s "$_dpi_cache" ]; then
+            _dpi_v=$(cat "$_dpi_cache" 2>/dev/null)
         else
-            _dpi_v=$(sed -n '1p' "$ROOT_DIR/dpi-detector-version" 2>/dev/null)
+            _dpi_probe=$(sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
+            _dpi_probe_rc=$?
+            _dpi_v=$(printf '%s\n' "$_dpi_probe" | sed -n '1p')
+            if [ "$_dpi_probe_rc" -eq 0 ] && [ -n "$_dpi_v" ]; then
+                printf '%s\n' "$_dpi_v" > "$ROOT_DIR/dpi-detector-version" 2>/dev/null || :
+                rm -f "$ROOT_DIR/dpi-detector-native-incompatible" "$ROOT_DIR/dpi-detector-python-mode"
+            elif [ "$_dpi_probe_rc" -eq 126 ] || [ "$_dpi_probe_rc" -eq 127 ] ||
+                 [ -f "$ROOT_DIR/dpi-detector-native-incompatible" ]; then
+                _dpi_v='ELF несовместим с Entware'
+            else
+                _dpi_v=$(sed -n '1p' "$ROOT_DIR/dpi-detector-version" 2>/dev/null)
+            fi
+            [ -z "$_dpi_v" ] || printf '%s\n' "$_dpi_v" > "$_dpi_cache" 2>/dev/null || :
         fi
         print_component 'DPI Detector' yes "${_dpi_v:-версия неизвестна}"
     else
@@ -2196,9 +2373,6 @@ show_status() {
     else
         say '  GeoIP/GeoIPSet         расписание не настроено'
     fi
-    if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -Fq '/opt/bin/xmenu sync'; then
-        say '  Синхронизация стратегий cron: настроена'
-    fi
     say "  Бэкапы: $BACKUP_DIR"
 }
 
@@ -2244,7 +2418,7 @@ install_rkn_for() {
         fi
         _rkn_size=$(wc -c < "$_rkn_tmp" 2>/dev/null | tr -d ' ')
         case "$_rkn_size" in ''|*[!0-9]*) _rkn_size=0 ;; esac
-        if [ "$_rkn_size" -lt 10000 ] || head -c 256 "$_rkn_tmp" 2>/dev/null | grep -qiE '<html|404: Not Found|Bad Gateway|Not Found'; then
+        if [ "$_rkn_size" -lt 10000 ] || response_looks_like_error_page "$_rkn_tmp"; then
             rm -f "$_rkn_tmp"
             say "${RED}Файл rkn.list слишком мал или содержит страницу ошибки; прежний список сохранён.${RESET}"
             return 1
@@ -2363,7 +2537,8 @@ update_nfmenu_script() {
     case "$_ufn_size" in ''|*[!0-9]*) _ufn_size=0 ;; esac
     if [ "$_ufn_size" -lt 50000 ] || ! grep -q '^SCRIPT_VERSION=' "$_ufn_tmp" ||
        ! grep -q '^main_menu()' "$_ufn_tmp" ||
-       [ "$(tail -n 1 "$_ufn_tmp" | tr -d '\r')" != 'main_menu' ] || ! sh -n "$_ufn_tmp"; then
+       [ "$(tr -d '\r' < "$_ufn_tmp" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')" != 'main_menu' ] ||
+       response_looks_like_error_page "$_ufn_tmp" || ! sh -n "$_ufn_tmp"; then
         rm -f "$_ufn_tmp"
         say "${RED}Проверка официального nfqws-menu.sh не пройдена; текущий файл не изменён.${RESET}"
         return 1
@@ -2395,16 +2570,14 @@ update_xmenu_script() {
     fi
     _ux_size=$(wc -c < "$_ux_tmp" 2>/dev/null | tr -d ' ')
     case "$_ux_size" in ''|*[!0-9]*) _ux_size=0 ;; esac
-    if [ "$_ux_size" -lt 50000 ] ||
+    if [ "$_ux_size" -lt 25000 ] ||
        [ "$(head -n 1 "$_ux_tmp" 2>/dev/null | tr -d '\r')" != '#!/bin/sh' ] ||
        ! grep -q '^APP_VERSION=' "$_ux_tmp" ||
        ! grep -q '^XMENU_UPDATE_URL=' "$_ux_tmp" ||
        ! grep -q '^update_xmenu_script()' "$_ux_tmp" ||
        ! grep -q '^render_menu()' "$_ux_tmp" ||
        ! grep -q '^main "\$@"' "$_ux_tmp" ||
-       ! grep -Eq "menu_item 23 '(Обновить Xmenu с GitHub|Update Xmenu from GitHub)'" "$_ux_tmp" ||
-       ! grep -q '23) update_xmenu_script' "$_ux_tmp" ||
-       head -c 256 "$_ux_tmp" 2>/dev/null | grep -qiE '<html|404: Not Found|Bad Gateway|Not Found' ||
+       response_looks_like_error_page "$_ux_tmp" ||
        ! sh -n "$_ux_tmp"; then
         rm -f "$_ux_tmp"
         say "${RED}Проверка обновления не пройдена. Установленная версия не изменена.${RESET}"
@@ -2416,9 +2589,9 @@ update_xmenu_script() {
     chmod 700 "$_ux_tmp" || { rm -f "$_ux_tmp"; return 1; }
     mv -f "$_ux_tmp" "$_ux_target" || { rm -f "$_ux_tmp"; return 1; }
     chmod 700 "$_ux_target" 2>/dev/null || :
-    say "${GREEN}Xmenu обновлён. Перезапускаю меню...${RESET}"
-    cleanup
-    exec "$_ux_target"
+    say "${GREEN}Xmenu обновлён.${RESET}"
+    say 'Выйди из меню и запусти /opt/bin/xmenu (или xmenu, если /opt/bin находится в PATH).'
+    return 0
 }
 
 change_ui_language() {
@@ -2438,25 +2611,60 @@ run_nfmenu_action() {
     esac
     ensure_network || return 1
     _rnf_src="/tmp/xmenu-nfqws-source-$$.sh"
+    _rnf_download="/tmp/xmenu-nfqws-download-$$.sh"
     _rnf_run="/tmp/xmenu-nfqws-action-$$.sh"
-    rm -f "$_rnf_src" "$_rnf_run"
-    say "Загружаю официальный nfqws-menu для действия: $_rnf_action"
-    if ! fetch "$NF_REPO/nfqws-menu.sh" "$_rnf_src" 90; then
-        rm -f "$_rnf_src" "$_rnf_run"
-        say "${RED}Не удалось получить актуальный nfqws-menu.${RESET}"
-        return 1
+    rm -f "$_rnf_run"
+    # Keep the validated upstream file for this process; repeated actions reuse it.
+    _rnf_valid=0
+    if [ -s "$_rnf_src" ]; then
+        _rnf_size=$(wc -c < "$_rnf_src" 2>/dev/null | tr -d ' ')
+        case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
+        _rnf_last=$(tr -d '\r' < "$_rnf_src" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
+        if [ "$_rnf_size" -ge 50000 ] && grep -q '^SCRIPT_VERSION=' "$_rnf_src" && \
+           grep -q '^main_menu()' "$_rnf_src" && [ "$_rnf_last" = main_menu ] && \
+           grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_src" && sh -n "$_rnf_src"; then
+            _rnf_valid=1
+        fi
     fi
-    _rnf_size=$(wc -c < "$_rnf_src" 2>/dev/null | tr -d ' ')
-    case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
-    if [ "$_rnf_size" -lt 50000 ] || ! grep -q '^SCRIPT_VERSION=' "$_rnf_src" ||
-       ! grep -q '^main_menu()' "$_rnf_src" || [ "$(tail -n 1 "$_rnf_src" | tr -d '\r')" != 'main_menu' ] ||
-       ! grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_src" || ! sh -n "$_rnf_src"; then
-        rm -f "$_rnf_src" "$_rnf_run"
-        say "${RED}Проверка источника nfqws-menu не пройдена; выполнение отменено.${RESET}"
-        return 1
+    if [ "$_rnf_valid" != 1 ]; then
+        rm -f "$_rnf_src" "$_rnf_download"
+        say "Загружаю официальный nfqws-menu для действия: $_rnf_action"
+        if ! fetch "$NF_REPO/nfqws-menu.sh" "$_rnf_download" 90; then
+            rm -f "$_rnf_download" "$_rnf_run"
+            say "${RED}Не удалось получить актуальный nfqws-menu.${RESET}"
+            return 1
+        fi
+        _rnf_size=$(wc -c < "$_rnf_download" 2>/dev/null | tr -d ' ')
+        case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
+        _rnf_last=$(tr -d '\r' < "$_rnf_download" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
+        if [ "$_rnf_size" -lt 50000 ] || response_looks_like_error_page "$_rnf_download" || \
+           ! grep -q '^SCRIPT_VERSION=' "$_rnf_download" || ! grep -q '^main_menu()' "$_rnf_download" || \
+           [ "$_rnf_last" != main_menu ] || \
+           ! grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_download" || ! sh -n "$_rnf_download"; then
+            rm -f "$_rnf_download" "$_rnf_run"
+            say "${RED}Проверка источника nfqws-menu не пройдена; выполнение отменено.${RESET}"
+            return 1
+        fi
+        tr -d '\r' < "$_rnf_download" > "$_rnf_src" || { rm -f "$_rnf_download" "$_rnf_src"; return 1; }
+        rm -f "$_rnf_download"
     fi
-    if ! sed '$d' "$_rnf_src" > "$_rnf_run"; then
-        rm -f "$_rnf_src" "$_rnf_run"
+    # Remove only the final nonblank `main_menu` invocation. The awk script
+    # buffers blank lines so interior blank lines (including here-doc content)
+    # are preserved exactly; trailing blank lines are emitted after the last line.
+    if ! awk '
+        /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
+        {
+            if (have_line) printf "%s\n", line
+            if (length(pending)) { printf "%s", pending; pending = "" }
+            line = $0
+            have_line = 1
+        }
+        END {
+            if (have_line && line !~ /^[[:space:]]*main_menu[[:space:]]*$/) print line
+            if (length(pending)) printf "%s", pending
+        }
+    ' "$_rnf_src" > "$_rnf_run"; then
+        rm -f "$_rnf_run"
         return 1
     fi
     cat >> "$_rnf_run" <<'XMENU_NFQWS_ACTION_EOF'
@@ -2493,110 +2701,11 @@ XMENU_NFQWS_ACTION_EOF
     else
         NFQWS_MENU_LANG="$(get_ui_lang)" XMENU_NFQWS_ACTION="$_rnf_action" sh "$_rnf_run" || _rnf_rc=$?
     fi
-    rm -f "$_rnf_src" "$_rnf_run"
-    drain_stdin
+    rm -f "$_rnf_run"
     return "$_rnf_rc"
 }
 
-xmenu_install_menu() {
-    while :; do
-        line
-        if [ "$(get_ui_lang)" = en ]; then
-            say "${PURPLE}[::]  Install / update components${RESET}"
-            menu_item 1 'Official NFQWS / NFQWS2 installer'
-            menu_item 2 'nfqws2-keenetic'
-            menu_item 3 'nfqws-web-keenetic'
-            menu_item 4 'nfqws2-ui'
-            menu_item 5 'XKeen — Stable'
-            menu_item 6 'XKeen UI — zxc-rv'
-            menu_item 7 'XKeen UI — umarcheh001'
-            menu_item 8 'XKeen Auto (Mihomo + GeoIPSet)'
-            menu_item 9 'XKeen Auto (Xray + GeoIPSet)'
-            menu_item 10 'Mihomo + GeoIPSet + XKeen UI + NFQWS bundle'
-            menu_item 11 'Xray + GeoIPSet + XKeen UI + NFQWS bundle'
-            menu_item 0 'Back'
-            _sub_prompt='Your choice [0 = back]: '
-        else
-            say "${PURPLE}[::]  Установка / обновление компонентов${RESET}"
-            menu_item 1 'Официальная установка NFQWS / NFQWS2'
-            menu_item 2 'nfqws2-keenetic'
-            menu_item 3 'nfqws-web-keenetic'
-            menu_item 4 'nfqws2-ui'
-            menu_item 5 'XKeen — Stable'
-            menu_item 6 'XKeen UI — zxc-rv'
-            menu_item 7 'XKeen UI — umarcheh001'
-            menu_item 8 'XKeen Auto (Mihomo + GeoIPSet)'
-            menu_item 9 'XKeen Auto (Xray + GeoIPSet)'
-            menu_item 10 'Mihomo + GeoIPSet + XKeen UI + NFQWS'
-            menu_item 11 'Xray + GeoIPSet + XKeen UI + NFQWS'
-            menu_item 0 'Назад'
-            _sub_prompt='Ваш выбор [0 = назад]: '
-        fi
-        line
-        _read_or_eof "$_sub_prompt" || return 0
-        _sub_choice=$_read_value
-        case "$_sub_choice" in
-            ''|0) return 0 ;;
-            *[!0-9]*) say "${RED}Введите номер цифрами.${RESET}"; continue ;;
-            1) run_nfmenu_action menu_install_nfqws; pause ;;
-            2) ensure_network && install_nfqws2; pause ;;
-            3) ensure_network && install_nf_web; pause ;;
-            4) ensure_network && install_nf_web2; pause ;;
-            5) ensure_network && install_xkeen_stable_binary; pause ;;
-            6) ensure_network && install_xkeen_ui; pause ;;
-            7) ensure_network && install_xkeen_ui_umarcheh001; pause ;;
-            8) install_xkeen_core_profile mihomo; pause ;;
-            9) install_xkeen_core_profile xray; pause ;;
-            10) install_manual_bundle_profile mihomo; pause ;;
-            11) install_manual_bundle_profile xray; pause ;;
-            *) say "${RED}Нет такого пункта.${RESET}"; sleep 1 ;;
-        esac
-    done
-}
-
-xmenu_service_menu() {
-    while :; do
-        line
-        if [ "$(get_ui_lang)" = en ]; then
-            say "${PURPLE}[::]  Xmenu service tools${RESET}"
-            menu_item 1 'Check/download blobs and lists of active config'
-            menu_item 2 'Install all nfqws2 blobs'
-            menu_item 3 'Status and versions'
-            menu_item 4 'Official nfqws-menu service tools (UPX / Dropbear)'
-            menu_item 5 'Manual install profiles'
-            menu_item 6 'Remove Xmenu'
-            menu_item 0 'Back'
-            _sub_prompt='Your choice [0 = back]: '
-        else
-            say "${PURPLE}[::]  Сервисные инструменты Xmenu${RESET}"
-            menu_item 1 'Проверить/скачать blobs и lists активной стратегии'
-            menu_item 2 'Установить все blobs nfqws2'
-            menu_item 3 'Статус и версии'
-            menu_item 4 'Сервисные инструменты nfqws-menu (UPX / Dropbear)'
-            menu_item 5 'Ручные профили установки'
-            menu_item 6 'Удалить Xmenu'
-            menu_item 0 'Назад'
-            _sub_prompt='Ваш выбор [0 = назад]: '
-        fi
-        line
-        _read_or_eof "$_sub_prompt" || return 0
-        _svc_choice=$_read_value
-        case "$_svc_choice" in
-            ''|0) return 0 ;;
-            1) sync_active_blobs; pause ;;
-            2) install_all_nfqw2_blobs; pause ;;
-            3) show_status; pause ;;
-            4) run_nfmenu_action menu_service; pause ;;
-            5) xmenu_install_menu ;;
-            6)
-                remove_menu
-                [ "${XMENU_REMOVED:-0}" = 1 ] && return 10
-                ;;
-            *[!0-9]*) say "${RED}Введите номер цифрами.${RESET}" ;;
-            *) say "${RED}Нет такого пункта.${RESET}"; sleep 1 ;;
-        esac
-    done
-}
+# The main menu is the single entry point; duplicate unreachable install/service menus were removed.
 
 render_menu() {
     [ -t 1 ] && printf '\033[2J\033[H'
@@ -2619,7 +2728,6 @@ render_menu() {
     # FIX: заголовок намеренно прижат к левому краю терминала.
     # Не вычислять отступ от COLUMNS/stty: на роутерах эти значения могут
     # различаться и снова визуально уводить заголовок далеко вправо.
-    _title_pad=0
     _title_pad_text=''
     printf '%s%s %s%s%s %s\n' \
         "$_title_pad_text" "${PURPLE}|${RESET}" "$WHITE" "$_title" "$RESET" "${PURPLE}|${RESET}"
@@ -3021,8 +3129,15 @@ remove_menu() {
     _remove_backups=0
     confirm 'Удалить также конфигурацию xmenu (manifest-ы, кэш, бэкапы)?' && _remove_backups=1
     _c="$ROOT_DIR/crontab.$$"
-    crontab -l 2>/dev/null | grep -Fv '/opt/bin/xmenu sync' | grep -Fv 'XMENU_GEOIPSET_DAILY_0430' > "$_c" || :
-    crontab "$_c" 2>/dev/null || :
+    if command -v crontab >/dev/null 2>&1 && crontab -l > "$_c" 2>/dev/null; then
+        grep -Fv '/opt/bin/xmenu sync' "$_c" > "$_c.next" || :
+        if ! crontab "$_c.next"; then
+            rm -f "$_c" "$_c.next"
+            say 'Не удалось сохранить crontab; удаление Xmenu отменено.'
+            return 1
+        fi
+    fi
+    rm -f "$_c.next"
     rm -f "$_c" /opt/bin/xmenu
     # Всегда удаляем манифесты и маркеры Xmenu; бэкапы сохраняем без отдельного подтверждения.
     rm -rf "$ROOT_DIR/manifests"
@@ -3072,7 +3187,7 @@ main() {
             install_xkeen_ui_umarcheh001
             return $? ;;
         install-nfqws2|install-nf-web|install-nf-web2|install-dpi-detector)
-            ensure_network || return 1
+            [ "$1" = install-nf-web2 ] || ensure_network || return 1
             case "$1" in
                 install-nfqws2) install_nfqws2 ;;
                 install-nf-web) install_nf_web ;;
@@ -3128,22 +3243,22 @@ main() {
             3) ensure_network && install_xkeen_ui_umarcheh001; pause ;;
             4) ensure_network && install_nfqws2; pause ;;
             5) ensure_network && install_nf_web; pause ;;
-            6) ensure_network && install_nf_web2; pause ;;
-            7) install_xkeen_core_profile mihomo; pause ;;
-            8) install_xkeen_core_profile xray; pause ;;
-            9) install_manual_bundle_profile mihomo; pause ;;
-            10) install_manual_bundle_profile xray; pause ;;
+            6) install_nf_web2; pause ;;
+            7) install_xkeen_core_profile mihomo; invalidate_core_version_cache; pause ;;
+            8) install_xkeen_core_profile xray; invalidate_core_version_cache; pause ;;
+            9) install_manual_bundle_profile mihomo; invalidate_core_version_cache; pause ;;
+            10) install_manual_bundle_profile xray; invalidate_core_version_cache; pause ;;
             11) ensure_network && strategy_menu; pause ;;
             12) sync_active_blobs; pause ;;
             13) install_all_nfqw2_blobs; pause ;;
-            14) run_nfmenu_action update_rkn_list; pause ;;
+            14) install_rkn_list; pause ;;
             15) launch_dpi; pause ;;
             16) run_nfmenu_action menu_tg_ws_proxy_rs; pause ;;
             17) run_nfmenu_action menu_keenkit; pause ;;
             18) run_nfmenu_action menu_awg_manager; pause ;;
             19) show_status; pause ;;
             20) change_ui_language; pause ;;
-            21) remove_components_menu ;;
+            21) remove_components_menu; invalidate_core_version_cache ;;
             22) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
             23) update_xmenu_script || pause ;;
             0) cleanup; return 0 ;;
@@ -3151,4 +3266,47 @@ main() {
         esac
     done
 }
+
+# First-run bootstrap: when launched from a transferred/downloaded path, install
+# this exact script as /opt/bin/xmenu so the `xmenu` command remains available
+# after the user exits the menu. When already running from the target, do nothing.
+install_xmenu_command() {
+    _ix_target='/opt/bin/xmenu'
+    case "$0" in
+        "$_ix_target") return 0 ;;
+    esac
+    _ix_source=$0
+    case "$_ix_source" in
+        /*) : ;;
+        *) _ix_source="$PWD/$_ix_source" ;;
+    esac
+    [ -f "$_ix_source" ] && [ -r "$_ix_source" ] || return 0
+    mkdir -p /opt/bin || {
+        say "${RED}Не удалось создать /opt/bin; установи скрипт вручную в /opt/bin/xmenu.${RESET}"
+        return 1
+    }
+    _ix_tmp="/opt/bin/.xmenu-bootstrap.$$"
+    rm -f "$_ix_tmp"
+    if ! cp "$_ix_source" "$_ix_tmp"; then
+        rm -f "$_ix_tmp"
+        say "${RED}Не удалось скопировать Xmenu в /opt/bin/xmenu.${RESET}"
+        return 1
+    fi
+    if ! sh -n "$_ix_tmp"; then
+        rm -f "$_ix_tmp"
+        say "${RED}Проверка синтаксиса копии Xmenu не пройдена; установленная команда не изменена.${RESET}"
+        return 1
+    fi
+    if ! chmod 700 "$_ix_tmp" || ! mv -f "$_ix_tmp" "$_ix_target"; then
+        rm -f "$_ix_tmp"
+        say "${RED}Не удалось активировать /opt/bin/xmenu.${RESET}"
+        return 1
+    fi
+    say "${GREEN}Команда Xmenu установлена: /opt/bin/xmenu. После выхода из меню запускай командой xmenu.${RESET}"
+    return 0
+}
+
+install_xmenu_command || :
+
 main "$@"
+
