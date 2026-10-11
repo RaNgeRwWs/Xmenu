@@ -37,6 +37,41 @@ curl -fLsS --retry 3 --connect-timeout 8 --max-time 90 \
 wget -O /tmp/xmenu.sh \
   https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
 ```
+
+### Шаг 2. Проверить и установить
+
+Команды ниже проверяют загруженный файл, создают резервную копию прежней версии (если она есть) и устанавливают Xmenu в `/opt/bin/xmenu`.
+
+```sh
+set -e
+
+SCRIPT=/tmp/xmenu.sh
+DEST=/opt/bin/xmenu
+
+[ -s "$SCRIPT" ] || { echo "Ошибка: $SCRIPT не найден или пуст." >&2; exit 1; }
+SIZE=$(wc -c < "$SCRIPT" | tr -d '[:space:]')
+[ "$SIZE" -ge 25000 ] || { echo "Ошибка: файл слишком мал ($SIZE байт)." >&2; exit 1; }
+grep -q '^APP_VERSION=' "$SCRIPT" || { echo "Ошибка: в файле не найдена версия Xmenu." >&2; exit 1; }
+sh -n "$SCRIPT" || { echo "Ошибка: проверка синтаксиса sh не пройдена." >&2; exit 1; }
+
+mkdir -p /opt/bin
+if [ -e "$DEST" ]; then
+  BACKUP="$DEST.bak.$(date +%Y%m%d-%H%M%S)"
+  cp -p "$DEST" "$BACKUP"
+  echo "Старая версия сохранена: $BACKUP"
+fi
+
+TMP="$DEST.tmp.$"
+cp "$SCRIPT" "$TMP"
+chmod 700 "$TMP"
+mv "$TMP" "$DEST"
+
+echo "Xmenu установлен: $DEST"
+/opt/bin/xmenu
+```
+
+После установки меню можно открывать командой `xmenu`; если оболочка не находит её в PATH, используйте `/opt/bin/xmenu`.
+
 ---
 
 ## ▶️ Как запустить Xmenu после установки
