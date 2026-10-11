@@ -3951,7 +3951,7 @@ remove_menu() {
     fi
     if ! confirm "$_remove_prompt"; then return 1; fi
 
-    _c="$ROOT_DIR/crontab.$"
+    _c=$(mktemp "$ROOT_DIR/crontab.XXXXXX" 2>/dev/null) || _c="$ROOT_DIR/crontab.$(date +%s)"
     if command -v crontab >/dev/null 2>&1 && crontab -l > "$_c" 2>/dev/null; then
         grep -Fv '/opt/bin/xmenu sync' "$_c" > "$_c.next" || :
         if ! crontab "$_c.next"; then
