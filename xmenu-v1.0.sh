@@ -3081,10 +3081,10 @@ check_xmenu_update_now() {
     if version_is_older "$APP_VERSION" "$_cxu_version"; then
         if [ "$_cxu_lang" = en ]; then
             say "${GREEN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
-            say 'Choose option 23 — Update Xmenu from GitHub to install it.'
+            say 'Choose option 22 — Update Xmenu from GitHub to install it.'
         else
             say "${GREEN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
-            say 'Для установки выбери пункт 23 — «Обновить Xmenu с GitHub».'
+            say 'Для установки выбери пункт 22 — «Обновить Xmenu с GitHub».'
         fi
         return 0
     fi
@@ -3099,7 +3099,7 @@ check_xmenu_update_now() {
         if [ "$_cxu_lang" = en ]; then
             say "${GREEN}Xmenu v$APP_VERSION is up to date. The updater can still apply changed code with the same version.${RESET}"
         else
-            say "${GREEN}Установлена актуальная версия Xmenu v$APP_VERSION. Пункт 23 также может применить изменённый код с тем же номером версии.${RESET}"
+            say "${GREEN}Установлена актуальная версия Xmenu v$APP_VERSION. Пункт 22 также может применить изменённый код с тем же номером версии.${RESET}"
         fi
     fi
     return 0
@@ -3599,15 +3599,16 @@ render_menu() {
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (install / launch)'
         menu_item 18 'awg-manager'
-        menu_item 19 'Status and versions'
-        menu_item 20 'Change language: RU / EN'
+        say ''
+        say "${PURPLE}[::]  Interface / language:${RESET}"
+        menu_item 19 'Change language: RU / EN'
         say ''
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
-        menu_item 21 'Remove components'
-        menu_item 22 'Remove Xmenu'
-        menu_item 23 'Update Xmenu from GitHub'
-        menu_item 24 'OPKG settings / Entware mirrors'
-        menu_item 25 'Back up NFQWS/XKeen configs'
+        menu_item 20 'Remove components'
+        menu_item 21 'Remove Xmenu'
+        menu_item 22 'Update Xmenu from GitHub'
+        menu_item 23 'OPKG settings / Entware mirrors'
+        menu_item 24 'Back up NFQWS/XKeen configs'
         menu_item 0  'Exit'
         _prompt='[?] Select an option [Enter = exit]: '
     else
@@ -3636,15 +3637,16 @@ render_menu() {
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (установка / запуск)'
         menu_item 18 'awg-manager'
-        menu_item 19 'Статус и версии'
-        menu_item 20 'Сменить язык: RU / EN'
+        say ''
+        say "${PURPLE}[::]  Интерфейс и язык:${RESET}"
+        menu_item 19 'Сменить язык: RU / EN'
         say ''
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
-        menu_item 21 'Удаление компонентов'
-        menu_item 22 'Удалить Xmenu'
-        menu_item 23 'Обновить Xmenu с GitHub'
-        menu_item 24 'Настройки OPKG / зеркала Entware'
-        menu_item 25 'Создать резервную копию конфигураций NFQWS/XKeen'
+        menu_item 20 'Удаление компонентов'
+        menu_item 21 'Удалить Xmenu'
+        menu_item 22 'Обновить Xmenu с GitHub'
+        menu_item 23 'Настройки OPKG / зеркала Entware'
+        menu_item 24 'Создать резервную копию конфигураций NFQWS/XKeen'
         menu_item 0  'Выход'
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
@@ -4243,7 +4245,7 @@ main() {
             return 0
         fi
         case "$_choice" in
-            1|2|3|4|5|6|7|8|9|10|15|16|17|18|19|21) invalidate_component_status_cache ;;
+            1|2|3|4|5|6|7|8|9|10|15|16|17|18|20) invalidate_component_status_cache ;;
         esac
         case "$_choice" in
             u|U)
@@ -4274,13 +4276,12 @@ main() {
             16) run_nfmenu_action menu_tg_ws_proxy_rs; pause ;;
             17) run_nfmenu_action menu_keenkit; pause ;;
             18) run_nfmenu_action menu_awg_manager; pause ;;
-            19) show_status; pause ;;
-            20) change_ui_language; pause ;;
-            21) remove_components_menu; invalidate_core_version_cache ;;
-            22) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
-            23) update_xmenu_script || pause ;;
-            24) opkg_settings_menu ;;
-            25) backup_configs; pause ;;
+            19) change_ui_language; pause ;;
+            20) remove_components_menu; invalidate_core_version_cache ;;
+            21) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
+            22) update_xmenu_script || pause ;;
+            23) opkg_settings_menu ;;
+            24) backup_configs; pause ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
