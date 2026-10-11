@@ -37,11 +37,11 @@ XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/.xmenu-component-refresh.lock"
 trap 'XMENU_UPDATE_REDRAW=1' USR1
 stop_component_status_refresh() {
     [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 0
-    [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$" ] || return 0
+    [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] || return 0
     _scsr_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
     case "$_scsr_worker" in
         ''|*[!0-9]*) : ;;
-        *) [ "$_scsr_worker" = "$" ] || kill "$_scsr_worker" 2>/dev/null || : ;;
+        *) [ "$_scsr_worker" = "$$" ] || kill "$_scsr_worker" 2>/dev/null || : ;;
     esac
     rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
     return 0
@@ -2581,7 +2581,7 @@ start_component_status_refresh() {
         component_refresh_is_running && return 0
         mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || return 1
     fi
-    printf '%s\n' "$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || {
+    printf '%s\n' "$$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || {
         rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
         return 1
     }
@@ -2604,9 +2604,9 @@ start_component_status_refresh() {
     # The wrapper writes its own PID before exec, so the worker cannot finish
     # and remove the lock before check_pid has been published by the parent.
     sh -c '
-        printf "%s\n" "$" > "$1/check_pid" 2>/dev/null || exit 1
+        printf "%s\n" "$$" > "$1/check_pid" 2>/dev/null || exit 1
         exec sh "$2" __refresh-component-cache "$3"
-    ' xmenu-component-refresh "$XMENU_COMPONENT_REFRESH_LOCK" "$_scr_source" "$" </dev/null >/dev/null 2>&1 &
+    ' xmenu-component-refresh "$XMENU_COMPONENT_REFRESH_LOCK" "$_scr_source" "$$" </dev/null >/dev/null 2>&1 &
     return 0
 }
 
