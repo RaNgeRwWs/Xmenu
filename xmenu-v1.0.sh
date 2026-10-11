@@ -102,6 +102,12 @@ else
 fi
 say() { printf '%s\n' "$*"; }
 
+# A character device may exist even when the process has no controlling TTY.
+# Actually attempt to open /dev/tty before redirecting installer input/output.
+has_controlling_tty() {
+    ( : </dev/tty ) >/dev/null 2>&1
+}
+
 # Portable response-page check: inspect only the first few lines.
 # Match HTML and explicit HTTP error-page markers, not generic words like "Not Found":
 # those can legitimately occur in shell comments or the first lines of domain lists.
@@ -148,7 +154,7 @@ run_remote_installer() {
         say "${RED}Синтаксис установщика $_ri_name некорректен для sh; выполнение отменено.${RESET}"
         return 1
     fi
-    if [ -c /dev/tty ]; then
+    if has_controlling_tty; then
         sh "$_ri_tmp" </dev/tty >/dev/tty 2>&1
         _ri_rc=$?
     else
@@ -177,7 +183,7 @@ terminal_width() {
     _width=''
     # Проверяем controlling TTY через /dev/tty, а не stdout: внутри $(...) stdout
     # является pipe, поэтому прежняя проверка [ -t 1 ] ошибочно игнорировала ширину SSH-терминала.
-    if [ -r /dev/tty ] && command -v stty >/dev/null 2>&1; then
+    if has_controlling_tty && command -v stty >/dev/null 2>&1; then
         _width=$(stty size </dev/tty 2>/dev/null | awk 'NF >= 2 {print $2; exit}')
     fi
     case "$_width" in ''|*[!0-9]*) _width=${COLUMNS:-80} ;; esac
@@ -249,7 +255,7 @@ _read_or_eof() {
     _read_prompt=${1:-}
     _read_value=''
     printf '%b' "$_read_prompt"
-    if [ -t 0 ] && [ -r /dev/tty ]; then
+    if [ -t 0 ] && has_controlling_tty; then
         IFS= read -r _read_value </dev/tty || return 1
     else
         IFS= read -r _read_value || return 1
@@ -767,13 +773,13 @@ install_nf_web2() {
        [ -x /opt/sbin/nfqws-ui-setup ] || [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
         say 'Обнаружен nfqws-ui. Запускаю официальное обновление...'
         if command -v nfqws-ui >/dev/null 2>&1; then
-            if [ -r /dev/tty ]; then nfqws-ui update </dev/tty; else nfqws-ui update; fi
+            if has_controlling_tty; then nfqws-ui update </dev/tty; else nfqws-ui update; fi
         elif command -v nfqws-ui-setup >/dev/null 2>&1; then
-            if [ -r /dev/tty ]; then nfqws-ui-setup update </dev/tty; else nfqws-ui-setup update; fi
+            if has_controlling_tty; then nfqws-ui-setup update </dev/tty; else nfqws-ui-setup update; fi
         elif [ -x /opt/sbin/nfqws-ui-setup ]; then
-            if [ -r /dev/tty ]; then /opt/sbin/nfqws-ui-setup update </dev/tty; else /opt/sbin/nfqws-ui-setup update; fi
+            if has_controlling_tty; then /opt/sbin/nfqws-ui-setup update </dev/tty; else /opt/sbin/nfqws-ui-setup update; fi
         elif [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
-            if [ -r /dev/tty ]; then /opt/usr/sbin/nfqws-ui-setup update </dev/tty; else /opt/usr/sbin/nfqws-ui-setup update; fi
+            if has_controlling_tty; then /opt/usr/sbin/nfqws-ui-setup update </dev/tty; else /opt/usr/sbin/nfqws-ui-setup update; fi
         else
             say 'Пакет обнаружен, но команда обновления отсутствует. Восстанови штатную утилиту пакета.'
             return 1
@@ -800,7 +806,7 @@ install_nf_web2() {
         return 1
     fi
     say 'Запускаю официальный install.sh...'
-    if [ -r /dev/tty ]; then sh "$_nfui_tmp" </dev/tty; else sh "$_nfui_tmp"; fi
+    if has_controlling_tty; then sh "$_nfui_tmp" </dev/tty; else sh "$_nfui_tmp"; fi
     _nfui_rc=$?
     rm -f "$_nfui_tmp"
     [ "$_nfui_rc" -eq 0 ] || say "${RED}Установка nfqws-ui завершилась с кодом $_nfui_rc.${RESET}"
@@ -1081,7 +1087,7 @@ install_xkeen_ui() {
     fetch "$XKEEN_UI_INSTALLER" "$_tmp" || { rm -f "$_tmp"; say 'Не удалось скачать XKeen UI.'; return 1; }
     grep -q 'XKEENUI_BIN=' "$_tmp" && sh -n "$_tmp" || { rm -f "$_tmp"; say 'Проверка установщика XKeen UI не пройдена.'; return 1; }
     say 'В штатном меню выбери 1 для установки или 2 для обновления.'
-    if [ -r /dev/tty ]; then sh "$_tmp" </dev/tty; else sh "$_tmp"; fi
+    if has_controlling_tty; then sh "$_tmp" </dev/tty; else sh "$_tmp"; fi
     _rc=$?; rm -f "$_tmp"; return "$_rc"
 }
 
@@ -2562,7 +2568,7 @@ install_tg_ws_proxy_rust() {
 install_keenkit() {
     if [ -x /opt/keenkit.sh ]; then
         say 'KeenKit уже найден: запускаю /opt/keenkit.sh.'
-        if [ -c /dev/tty ]; then sh /opt/keenkit.sh </dev/tty >/dev/tty 2>&1; else sh /opt/keenkit.sh; fi
+        if has_controlling_tty; then sh /opt/keenkit.sh </dev/tty >/dev/tty 2>&1; else sh /opt/keenkit.sh; fi
         return $?
     fi
     confirm_yes 'Установить KeenKit?' || return 0
@@ -2789,7 +2795,7 @@ xmenu_start_update_check() {
 xmenu_read_menu_prompt() {
     _xrmp_prompt=$1
     printf '%b' "$_xrmp_prompt"
-    if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+    if [ ! -t 0 ] || ! has_controlling_tty; then
         _read_or_eof ''
         return $?
     fi
@@ -3132,7 +3138,7 @@ XMENU_NFQWS_ACTION_EOF
         return 1
     fi
     _rnf_rc=0
-    if [ -c /dev/tty ]; then
+    if has_controlling_tty; then
         NFQWS_MENU_LANG="$(get_ui_lang)" XMENU_NFQWS_ACTION="$_rnf_action" sh "$_rnf_run" </dev/tty >/dev/tty 2>&1 || _rnf_rc=$?
     else
         NFQWS_MENU_LANG="$(get_ui_lang)" XMENU_NFQWS_ACTION="$_rnf_action" sh "$_rnf_run" || _rnf_rc=$?
@@ -3218,7 +3224,7 @@ render_menu() {
         say "${PURPLE}[::]  Strategies / blobs / lists:${RESET}"
         menu_item 11 'Select and apply nfqws strategy'
         menu_item 12 'Download/check blobs and lists for active strategy from the list'
-        menu_item 13 'Install all required blobs'
+        menu_item 13 'Install all nfqws2 blobs'
         menu_item 14 'Download rkn.list (nfqws2 / nfqws) — 125k+ domains'
         say ''
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
@@ -3234,6 +3240,7 @@ render_menu() {
         menu_item 22 'Remove Xmenu'
         menu_item 23 'Update Xmenu from GitHub'
         menu_item 24 'OPKG settings / Entware mirrors'
+        menu_item 25 'Back up NFQWS/XKeen configs'
         menu_item 0  'Exit'
         _prompt='[?] Select an option [Enter = exit]: '
     else
@@ -3254,7 +3261,7 @@ render_menu() {
         say "${PURPLE}[::]  Стратегии / blobs / lists:${RESET}"
         menu_item 11 'Выбрать и применить стратегию nfqws'
         menu_item 12 'Скачать/проверить blobs и lists активной стратегии из списка'
-        menu_item 13 'Установить все необходимые blobs'
+        menu_item 13 'Установить все blobs nfqws2'
         menu_item 14 'Скачать rkn.list (nfqws2 / nfqws) — 125k+ доменов'
         say ''
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
@@ -3270,6 +3277,7 @@ render_menu() {
         menu_item 22 'Удалить Xmenu'
         menu_item 23 'Обновить Xmenu с GitHub'
         menu_item 24 'Настройки OPKG / зеркала Entware'
+        menu_item 25 'Создать резервную копию конфигураций NFQWS/XKeen'
         menu_item 0  'Выход'
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
@@ -3604,6 +3612,11 @@ remove_menu() {
 main() {
     configure_locale
     require_root || return 1
+    # Updating Xmenu uses curl/wget directly and must not be blocked by a missing opkg.
+    if [ "${1:-}" = update-xmenu ]; then
+        update_xmenu_script
+        return $?
+    fi
     require_opkg || return 1
     ensure_dirs || return 1
     [ -s "$LANG_FILE" ] || printf 'ru\n' > "$LANG_FILE" 2>/dev/null || :
@@ -3655,7 +3668,6 @@ main() {
         install-awg-manager) install_awg_manager; return $? ;;
         backup) backup_configs; return $? ;;
         opkg-settings) opkg_settings_menu; return $? ;;
-        update-xmenu) update_xmenu_script; return $? ;;
         *) : ;;
     esac
     # Проверка последней версии работает в фоне: меню не ждёт GitHub/зеркала и не зависит от opkg.
@@ -3713,6 +3725,7 @@ main() {
             22) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
             23) update_xmenu_script || pause ;;
             24) opkg_settings_menu ;;
+            25) backup_configs; pause ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
