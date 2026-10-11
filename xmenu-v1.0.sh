@@ -3030,7 +3030,73 @@ xmenu_remote_version_probe() {
     return 1
 }
 
-xmenu_update_check_worker() {
+# Force a network check even when the automatic 10-minute cache is still fresh.
+check_xmenu_update_now() {
+    _cxu_lang=$(get_ui_lang)
+    if [ "$_cxu_lang" = en ]; then
+        say "Checking GitHub for an Xmenu update..."
+    else
+        say "Проверяю наличие обновления Xmenu на GitHub..."
+    fi
+    _cxu_version=$(xmenu_remote_version_probe) || {
+        if [ "$_cxu_lang" = en ]; then
+            say "${RED}Could not retrieve the remote Xmenu version. Check the connection and try again.${RESET}"
+        else
+            say "${RED}Не удалось получить версию Xmenu с сервера. Проверь подключение и повтори попытку.${RESET}"
+        fi
+        return 1
+    }
+
+    _cxu_now=$(date +%s 2>/dev/null || printf '0')
+    case "$_cxu_now" in ''|*[!0-9]*) _cxu_now=0 ;; esac
+    _cxu_cache_tmp="$ROOT_DIR/xmenu-update-cache.manual.$$"
+    {
+        printf 'checked=%s\n' "$_cxu_now"
+        printf 'version=%s\n' "$_cxu_version"
+    } > "$_cxu_cache_tmp" 2>/dev/null || {
+        rm -f "$_cxu_cache_tmp"
+        _cxu_cache_write_failed=1
+    }
+    if [ "${_cxu_cache_write_failed:-0}" != 1 ] && ! mv -f "$_cxu_cache_tmp" "$XMENU_UPDATE_CACHE" 2>/dev/null; then
+        rm -f "$_cxu_cache_tmp"
+        _cxu_cache_write_failed=1
+    fi
+    if [ "${_cxu_cache_write_failed:-0}" = 1 ]; then
+        if [ "$_cxu_lang" = en ]; then
+            say "${YELLOW}Remote version was detected, but the cache could not be updated.${RESET}"
+        else
+            say "${YELLOW}Удалённая версия получена, но кэш обновить не удалось.${RESET}"
+        fi
+    fi
+
+    if version_is_older "$APP_VERSION" "$_cxu_version"; then
+        if [ "$_cxu_lang" = en ]; then
+            say "${GREEN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
+            say 'Choose option 23 — Update Xmenu from GitHub to install it.'
+        else
+            say "${GREEN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
+            say 'Для установки выбери пункт 23 — «Обновить Xmenu с GitHub».'
+        fi
+        return 0
+    fi
+
+    if version_is_older "$_cxu_version" "$APP_VERSION"; then
+        if [ "$_cxu_lang" = en ]; then
+            say "${YELLOW}The server version v$_cxu_version is older than the installed v$APP_VERSION. No downgrade will be offered.${RESET}"
+        else
+            say "${YELLOW}На сервере версия v$_cxu_version старее установленной v$APP_VERSION. Откат не предлагается.${RESET}"
+        fi
+    else
+        if [ "$_cxu_lang" = en ]; then
+            say "${GREEN}Xmenu v$APP_VERSION is up to date. The updater can still apply changed code with the same version.${RESET}"
+        else
+            say "${GREEN}Установлена актуальная версия Xmenu v$APP_VERSION. Пункт 23 также может применить изменённый код с тем же номером версии.${RESET}"
+        fi
+    fi
+    return 0
+}
+
+xmenu_update_check_worker() {xmenu_update_check_worker() {
     _xuw_parent=$1
     _xuw_tmp="$ROOT_DIR/xmenu-update-cache.tmp"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
@@ -3490,6 +3556,13 @@ render_menu() {
     say ''
     render_component_statuses
     line
+
+    if [ "$_lang" = en ]; then
+        menu_item U 'Check for Xmenu updates now'
+    else
+        menu_item U 'Проверить наличие обновления Xmenu'
+    fi
+    say ''
 
     if [ "$_lang" = en ]; then
         say "${PURPLE}[::]  Install / update:${RESET}"
@@ -4162,6 +4235,13 @@ main() {
         fi
         case "$_choice" in
             1|2|3|4|5|6|7|8|9|10|15|16|17|18|19|21) invalidate_component_status_cache ;;
+        esac
+        case "$_choice" in
+            u|U)
+                check_xmenu_update_now
+                pause
+                continue
+                ;;
         esac
         case "$_choice" in
             *[!0-9]*) say "${RED}Нужно ввести номер пункта цифрами.${RESET}"; continue ;;
