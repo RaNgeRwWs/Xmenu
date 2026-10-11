@@ -2399,9 +2399,9 @@ render_component_statuses() {
         _XMENU_COMPONENT_CACHE_HIT=1
         _OPKG_RENDER_CACHE_FILE=''
     else
-        _COMPONENT_INSTALLED_FILE="$ROOT_DIR/.components-installed.$"
+        _COMPONENT_INSTALLED_FILE="$ROOT_DIR/.components-installed.$PPID"
         _XMENU_COMPONENT_CACHE_HIT=0
-        _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$"
+        _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$PPID"
         : > "$_COMPONENT_INSTALLED_FILE" || return 1
     if ! opkg list-installed > "$_OPKG_RENDER_CACHE_FILE" 2>/dev/null; then
         rm -f "$_OPKG_RENDER_CACHE_FILE"
@@ -2473,8 +2473,8 @@ render_component_statuses() {
     else print_component 'dropbear' no ''; fi
 
         # Publish the cache atomically. An empty row file is valid when nothing is installed.
-        _component_cache_tmp="$ROOT_DIR/.components-status.$"
-        _component_cache_time_tmp="$ROOT_DIR/.components-status-time.$"
+        _component_cache_tmp="$ROOT_DIR/components-status.cache.tmp"
+        _component_cache_time_tmp="$ROOT_DIR/components-status.cache.time.tmp"
         if cp "$_COMPONENT_INSTALLED_FILE" "$_component_cache_tmp" 2>/dev/null &&
            mv -f "$_component_cache_tmp" "$XMENU_COMPONENT_CACHE" 2>/dev/null; then
             _component_cache_now=$(date +%s 2>/dev/null || printf '0')
@@ -2900,7 +2900,7 @@ xmenu_nfmenu_local_version() {
 }
 
 xmenu_nfmenu_remote_version_probe() {
-    _xnfr_tmp="/tmp/xmenu-nfqws-menu-version-$"
+    _xnfr_tmp="/tmp/xmenu-nfqws-menu-version.tmp"
     rm -f "$_xnfr_tmp"
     if xmenu_fetch_file "$NFQWS_MENU_UPDATE_URL" "$_xnfr_tmp" 7 0-4095; then
         _xnfr_version=$(sed -n 's/^[[:space:]]*SCRIPT_VERSION[[:space:]]*="[[:space:]]*\([0-9][0-9.]*\)"[[:space:]]*$/\1/p' "$_xnfr_tmp" | sed -n '1p')
@@ -2925,7 +2925,7 @@ xmenu_cached_nfmenu_remote_version() {
 
 xmenu_update_check_worker() {
     _xuw_parent=$1
-    _xuw_tmp="$ROOT_DIR/.xmenu-update-cache.$"
+    _xuw_tmp="$ROOT_DIR/.xmenu-update-cache.tmp"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
     _xuw_nfmenu_version=$(xmenu_nfmenu_remote_version_probe 2>/dev/null) || _xuw_nfmenu_version=unknown
     {
