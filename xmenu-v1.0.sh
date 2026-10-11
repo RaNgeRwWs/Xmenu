@@ -9,7 +9,6 @@ CACHE_DIR="/opt/etc/nfqws-menu/strategies"
 LANG_FILE="$ROOT_DIR/language"
 NF_REPO="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main"
 XMENU_UPDATE_URL="https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh"
-NFQWS_MENU_UPDATE_URL="https://raw.githubusercontent.com/rndnaame/nfqws-menu/refs/heads/main/nfqws-menu.sh"
 XKEEN_INSTALLER="https://raw.githubusercontent.com/jameszeroX/XKeen/main/install.sh"
 XKEEN_UI_INSTALLER="https://raw.githubusercontent.com/zxc-rv/XKeen-UI/main/setup.sh"
 NFQWS2_UI_INSTALLER="https://github.com/zemidala/nfqws2-ui/releases/latest/download/install.sh"
@@ -2399,9 +2398,9 @@ render_component_statuses() {
         _XMENU_COMPONENT_CACHE_HIT=1
         _OPKG_RENDER_CACHE_FILE=''
     else
-        _COMPONENT_INSTALLED_FILE="$ROOT_DIR/.components-installed.$PPID"
+        _COMPONENT_INSTALLED_FILE="$ROOT_DIR/.components-installed.$$"
         _XMENU_COMPONENT_CACHE_HIT=0
-        _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$PPID"
+        _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$$"
         : > "$_COMPONENT_INSTALLED_FILE" || return 1
     if ! opkg list-installed > "$_OPKG_RENDER_CACHE_FILE" 2>/dev/null; then
         rm -f "$_OPKG_RENDER_CACHE_FILE"
@@ -2473,8 +2472,8 @@ render_component_statuses() {
     else print_component 'dropbear' no ''; fi
 
         # Publish the cache atomically. An empty row file is valid when nothing is installed.
-        _component_cache_tmp="$ROOT_DIR/components-status.cache.tmp"
-        _component_cache_time_tmp="$ROOT_DIR/components-status.cache.time.tmp"
+        _component_cache_tmp="$ROOT_DIR/.components-status.$$.tmp"
+        _component_cache_time_tmp="$ROOT_DIR/.components-status-time.$$.tmp"
         if cp "$_COMPONENT_INSTALLED_FILE" "$_component_cache_tmp" 2>/dev/null &&
            mv -f "$_component_cache_tmp" "$XMENU_COMPONENT_CACHE" 2>/dev/null; then
             _component_cache_now=$(date +%s 2>/dev/null || printf '0')
@@ -2856,8 +2855,6 @@ xmenu_valid_version() {
 
 xmenu_update_cache_is_fresh() {
     [ -r "$XMENU_UPDATE_CACHE" ] || return 1
-    # Older cache formats have no nfqws-menu entry; refresh once after upgrade.
-    grep -q '^nfqws_menu_version=' "$XMENU_UPDATE_CACHE" 2>/dev/null || return 1
     _xcf_checked=$(sed -n 's/^checked=//p' "$XMENU_UPDATE_CACHE" | sed -n '1p')
     case "$_xcf_checked" in ''|*[!0-9]*) return 1 ;; esac
     _xcf_now=$(date +%s 2>/dev/null || printf '0')
@@ -2893,53 +2890,16 @@ xmenu_remote_version_probe() {
     return 1
 }
 
-xmenu_nfmenu_local_version() {
-    _xnfl_file='/opt/nfqws-menu.sh'
-    [ -r "$_xnfl_file" ] || return 1
-    sed -n 's/^[[:space:]]*SCRIPT_VERSION[[:space:]]*=[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$_xnfl_file" 2>/dev/null | sed -n '1p'
-}
-
-xmenu_nfmenu_remote_version_probe() {
-    _xnfr_tmp="/tmp/xmenu-nfqws-menu-version.tmp"
-    rm -f "$_xnfr_tmp"
-    if xmenu_fetch_file "$NFQWS_MENU_UPDATE_URL" "$_xnfr_tmp" 7 0-4095; then
-        _xnfr_version=$(sed -n 's/^[[:space:]]*SCRIPT_VERSION[[:space:]]*="[[:space:]]*\([0-9][0-9.]*\)"[[:space:]]*$/\1/p' "$_xnfr_tmp" | sed -n '1p')
-        if xmenu_valid_version "$_xnfr_version" &&
-           [ "$(head -n 1 "$_xnfr_tmp" 2>/dev/null | tr -d '\r')" = '#!/bin/sh' ] &&
-           grep -q '^SCRIPT_VERSION=' "$_xnfr_tmp"; then
-            rm -f "$_xnfr_tmp"
-            printf '%s' "$_xnfr_version"
-            return 0
-        fi
-    fi
-    rm -f "$_xnfr_tmp"
-    return 1
-}
-
-xmenu_cached_nfmenu_remote_version() {
-    xmenu_update_cache_is_fresh || return 1
-    _xnfc_version=$(sed -n 's/^nfqws_menu_version=//p' "$XMENU_UPDATE_CACHE" | sed -n '1p')
-    xmenu_valid_version "$_xnfc_version" || return 1
-    printf '%s' "$_xnfc_version"
-}
-
 xmenu_update_check_worker() {
     _xuw_parent=$1
     _xuw_tmp="$ROOT_DIR/xmenu-update-cache.tmp"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
-    _xuw_nfmenu_version=$(xmenu_nfmenu_remote_version_probe 2>/dev/null) || _xuw_nfmenu_version=unknown
     {
         printf 'checked=%s\n' "$(date +%s 2>/dev/null || printf 0)"
         printf 'version=%s\n' "$_xuw_version"
-        printf 'nfqws_menu_version=%s\n' "$_xuw_nfmenu_version"
     } > "$_xuw_tmp" 2>/dev/null && mv -f "$_xuw_tmp" "$XMENU_UPDATE_CACHE" 2>/dev/null || rm -f "$_xuw_tmp"
     _xuw_update_pending=0
     if xmenu_valid_version "$_xuw_version" && version_is_older "$APP_VERSION" "$_xuw_version"; then
-        _xuw_update_pending=1
-    fi
-    _xuw_nfmenu_local=$(xmenu_nfmenu_local_version 2>/dev/null || :)
-    if xmenu_valid_version "$_xuw_nfmenu_version" && xmenu_valid_version "$_xuw_nfmenu_local" &&
-       version_is_older "$_xuw_nfmenu_local" "$_xuw_nfmenu_version"; then
         _xuw_update_pending=1
     fi
     if [ "$_xuw_update_pending" = 1 ]; then
@@ -3364,16 +3324,6 @@ render_menu() {
             say "${GREEN}↑ Update available: Xmenu v$_latest_xmenu${RESET}"
         else
             say "${GREEN}↑ Доступно обновление Xmenu v$_latest_xmenu${RESET}"
-        fi
-    fi
-    _latest_nfmenu=$(xmenu_cached_nfmenu_remote_version 2>/dev/null || :)
-    _local_nfmenu=$(xmenu_nfmenu_local_version 2>/dev/null || :)
-    if [ -n "$_latest_nfmenu" ] && [ -n "$_local_nfmenu" ] &&
-       version_is_older "$_local_nfmenu" "$_latest_nfmenu"; then
-        if [ "$_lang" = en ]; then
-            say "${GREEN}↑ Update available: nfqws-menu v$_latest_nfmenu${RESET}"
-        else
-            say "${GREEN}↑ Доступно обновление nfqws-menu v$_latest_nfmenu${RESET}"
         fi
     fi
     say ''
