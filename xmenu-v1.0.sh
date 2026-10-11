@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.1 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.1"
+# Xmenu ◆ v1.2.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.2.0"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -27,6 +27,11 @@ INTERRUPTED=0
 MENU_READING=0
 _LAST_MENU_INTERRUPT_TS=0
 _FETCH_FAIL_COUNT=0
+XMENU_UPDATE_REDRAW=0
+XMENU_UPDATE_CHECK_PID=''
+XMENU_UPDATE_CACHE="$ROOT_DIR/xmenu-update.cache"
+XMENU_UPDATE_LOCK="$ROOT_DIR/.xmenu-update-check.lock"
+trap 'XMENU_UPDATE_REDRAW=1' USR1
 cleanup() {
     _cleanup_mode=${1:-release}
     if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ]; then
@@ -40,6 +45,13 @@ cleanup() {
     # Some operations call cleanup() only to release the lock. Keep session caches
     # in that case; at process exit remove this PID's /tmp files and Xmenu work artifacts.
     if [ "$_cleanup_mode" = final ]; then
+        if [ -n "${XMENU_UPDATE_CHECK_PID:-}" ] && [ -d "$XMENU_UPDATE_LOCK" ] &&
+           [ "$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] &&
+           [ "$(cat "$XMENU_UPDATE_LOCK/check_pid" 2>/dev/null || :)" = "$XMENU_UPDATE_CHECK_PID" ]; then
+            kill "$XMENU_UPDATE_CHECK_PID" 2>/dev/null || :
+            rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
+        fi
+        rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
         for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* \
             "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* \
             "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* \
@@ -598,41 +610,60 @@ backup_configs() {
 # пакет уже установлен; opkg update всегда выполняется перед opkg upgrade.
 upgrade_nfqws2_package() {
     require_opkg || return 1
-    ensure_network || return 1
     _up_arch=$(get_arch) || { say "${RED}Не удалось определить архитектуру Entware.${RESET}"; return 1; }
     case "$_up_arch" in aarch64|armv7|mipsel|mips|x86_64|x86) ;; *) say "${RED}Не удалось надёжно определить архитектуру Entware.${RESET}"; return 1;; esac
+
+    # Определяем действие до сетевого запроса и сообщаем пользователю, что будет обновляться.
+    if is_installed nfqws2-keenetic; then
+        _up_action=upgrade
+        say 'nfqws2 уже установлен. Обновляю индексы репозиториев, затем выполню opkg upgrade nfqws2-keenetic.'
+    else
+        _up_action=install
+        say "${YELLOW}nfqws2 не найден в списке установленных пакетов. После обновления индексов выполню opkg install.${RESET}"
+    fi
+
     opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
     mkdir -p /opt/etc/opkg || return 1
     printf 'src/gz nfqws2-keenetic %s/%s\n' "$NFQWS2_REPO_BASE" "$_up_arch" > /opt/etc/opkg/nfqws2-keenetic.conf || return 1
-    opkg update || return 1
+    say 'Обновляю индексы OPKG...'
+    opkg update || { say "${RED}opkg update не завершился. Пакет пока не обновлялся; повтори попытку после исправления доступа к репозиторию.${RESET}"; return 1; }
+
+    # Перепроверяем локальную базу перед действием, чтобы не пытаться обновить исчезнувший пакет.
     if is_installed nfqws2-keenetic; then
-        say 'nfqws2 уже установлен: проверяю и устанавливаю обновление пакета.'
+        say 'Выполняю: opkg upgrade nfqws2-keenetic'
         opkg upgrade nfqws2-keenetic
     else
-        say "${YELLOW}nfqws2 больше не числится установленным; выполняю установку.${RESET}"
+        say 'Выполняю: opkg install nfqws2-keenetic'
         opkg install nfqws2-keenetic
     fi
 }
-
 upgrade_nf_web_package() {
     require_opkg || return 1
-    ensure_network || return 1
+    if is_installed nfqws-keenetic-web; then
+        say 'nfqws-keenetic-web уже установлен. Обновляю индексы репозиториев, затем выполню opkg upgrade nfqws-keenetic-web.'
+    else
+        say "${YELLOW}nfqws-keenetic-web не найден в списке установленных пакетов. После обновления индексов выполню opkg install.${RESET}"
+    fi
+
     opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
     mkdir -p /opt/etc/opkg || return 1
     printf 'src/gz nfqws-keenetic-web %s\n' "$NFQWS_WEB_REPO" > /opt/etc/opkg/nfqws-keenetic-web.conf || return 1
-    opkg update || return 1
+    say 'Обновляю индексы OPKG...'
+    opkg update || { say "${RED}opkg update не завершился. Пакет пока не обновлялся; проверь доступ к репозиторию.${RESET}"; return 1; }
+
     if is_installed nfqws-keenetic-web; then
-        say 'nfqws-keenetic-web уже установлен: проверяю и устанавливаю обновление пакета.'
+        say 'Выполняю: opkg upgrade nfqws-keenetic-web'
         opkg upgrade nfqws-keenetic-web
     else
-        say "${YELLOW}nfqws-keenetic-web больше не числится установленным; выполняю установку.${RESET}"
+        say 'Выполняю: opkg install nfqws-keenetic-web'
         opkg install nfqws-keenetic-web
     fi
 }
-
 install_nfqws2() {
     line; say "${CYAN}nfqws2${RESET} — движок обхода DPI"
-    ensure_network || return 1
+    # Это прямая OPKG-операция: ensure_network() мог запускать предварительный opkg update
+    # и делать второй сетевой проход до проверки/обновления целевого пакета.
+    require_opkg || return 1
     _arch=$(get_arch) || { say "${RED}Не удалось определить архитектуру Entware.${RESET}"; return 1; }
     case "$_arch" in aarch64|armv7|mipsel|mips|x86_64|x86) ;; *) say "${RED}Не удалось надёжно определить архитектуру Entware.${RESET}"; return 1;; esac
     if is_installed nfqws-keenetic; then
@@ -646,11 +677,24 @@ install_nfqws2() {
             say 'Оставляю v1; установка v2 отменена.'; return 1
         fi
     fi
+
     opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
-    mkdir -p /opt/etc/opkg
+    mkdir -p /opt/etc/opkg || return 1
     printf 'src/gz nfqws2-keenetic %s/%s\n' "$NFQWS2_REPO_BASE" "$_arch" > /opt/etc/opkg/nfqws2-keenetic.conf || return 1
-    opkg update || return 1
-    if is_installed nfqws2-keenetic; then opkg upgrade nfqws2-keenetic; else opkg install nfqws2-keenetic; fi
+    if is_installed nfqws2-keenetic; then
+        say 'nfqws2 уже установлен. Обновляю индексы, затем выполню opkg upgrade nfqws2-keenetic.'
+    else
+        say 'nfqws2 не установлен. Обновляю индексы, затем выполню opkg install nfqws2-keenetic.'
+    fi
+    say 'Обновляю индексы OPKG...'
+    opkg update || { say "${RED}opkg update не завершился. До opkg upgrade/install выполнение не дошло.${RESET}"; return 1; }
+    if is_installed nfqws2-keenetic; then
+        say 'Выполняю: opkg upgrade nfqws2-keenetic'
+        opkg upgrade nfqws2-keenetic
+    else
+        say 'Выполняю: opkg install nfqws2-keenetic'
+        opkg install nfqws2-keenetic
+    fi
 }
 port_state() {
     _port="$1"
@@ -676,7 +720,9 @@ port_state() {
 
 install_nf_web() {
     line; say "${CYAN}nfqws-web-keenetic${RESET}"
-    ensure_network || return 1
+    # Для установки/обновления OPKG-пакета не нужен HTTPS-preflight Xmenu;
+    # он мог запускать отдельный opkg update до проверки целевого репозитория.
+    require_opkg || return 1
     port_state 90
     _ps=$?
     case "$_ps" in
@@ -689,10 +735,22 @@ install_nf_web() {
         return 1
     fi
     opkg install ca-certificates wget-ssl >/dev/null 2>&1 || :
-    mkdir -p /opt/etc/opkg
+    mkdir -p /opt/etc/opkg || return 1
     printf 'src/gz nfqws-keenetic-web %s\n' "$NFQWS_WEB_REPO" > /opt/etc/opkg/nfqws-keenetic-web.conf || return 1
-    opkg update || return 1
-    if is_installed nfqws-keenetic-web; then opkg upgrade nfqws-keenetic-web; else opkg install nfqws-keenetic-web; fi
+    if is_installed nfqws-keenetic-web; then
+        say 'nfqws-keenetic-web уже установлен. Обновляю индексы, затем выполню opkg upgrade nfqws-keenetic-web.'
+    else
+        say 'nfqws-keenetic-web не установлен. Обновляю индексы, затем выполню opkg install nfqws-keenetic-web.'
+    fi
+    say 'Обновляю индексы OPKG...'
+    opkg update || { say "${RED}opkg update не завершился. До opkg upgrade/install выполнение не дошло.${RESET}"; return 1; }
+    if is_installed nfqws-keenetic-web; then
+        say 'Выполняю: opkg upgrade nfqws-keenetic-web'
+        opkg upgrade nfqws-keenetic-web
+    else
+        say 'Выполняю: opkg install nfqws-keenetic-web'
+        opkg install nfqws-keenetic-web
+    fi
 }
 install_nf_web2() {
     line; say "${CYAN}nfqws-ui (nfqws2-ui)${RESET}"
@@ -2554,18 +2612,226 @@ update_nfmenu_script() {
 }
 
 
-# Обновляет только Xmenu из собственного GitHub-репозитория.
-# Сначала загружает во временный файл, проверяет источник/размер/синтаксис,
-# затем сохраняет текущую версию и атомарно заменяет /opt/bin/xmenu.
+# Возвращает 0, если первая версия строго старее второй; 1 — если равна/новее.
+# Версии Xmenu ожидаются в числовом формате вроде 1.1 или 1.0.5.
+version_is_older() {
+    _vo_old=$1
+    _vo_current=$2
+    case "$_vo_old:$_vo_current" in
+        *[!0-9.:]*|:*|*:) return 2 ;;
+    esac
+    case "$_vo_old" in .*|*..*|*.) return 2 ;; esac
+    case "$_vo_current" in .*|*..*|*.) return 2 ;; esac
+    awk -v old="$_vo_old" -v current="$_vo_current" '
+        BEGIN {
+            n=split(old, a, ".")
+            m=split(current, b, ".")
+            max=(n>m?n:m)
+            for (i=1; i<=max; i++) {
+                x=(i<=n ? a[i]+0 : 0)
+                y=(i<=m ? b[i]+0 : 0)
+                if (x < y) exit 0
+                if (x > y) exit 1
+            }
+            exit 1
+        }
+    '
+}
+
+# Сетевой загрузчик для обновления самого Xmenu. Не вызывает ensure_network/opkg:
+# обновление меню не должно зависеть от зависшего opkg update. Для wget принудительно
+# задаём одну попытку (-t 1), потому что Entware wget иначе может повторять тайм-ауты бесконечно.
+xmenu_wget_bounded() {
+    _xwb_limit=$1
+    _xwb_wget=$2
+    shift 2
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_xwb_limit" "$_xwb_wget" "$@"
+        return $?
+    fi
+    if command -v busybox >/dev/null 2>&1 && busybox timeout "$_xwb_limit" true >/dev/null 2>&1; then
+        busybox timeout "$_xwb_limit" "$_xwb_wget" "$@"
+        return $?
+    fi
+    # Do not fall back to wget without a process deadline: -T alone is a
+    # per-read timeout and can still wait for a painfully slow stream forever.
+    return 125
+}
+
+xmenu_fetch_file() {
+    _xmf_url=$1
+    _xmf_out=$2
+    _xmf_timeout=${3:-12}
+    _xmf_range=${4:-}
+    case "$_xmf_timeout" in ''|*[!0-9]*) _xmf_timeout=12 ;; esac
+    _xmf_candidates=$(fetch_url_candidates "$_xmf_url") || return 1
+    _xmf_curl=$(command -v curl 2>/dev/null || :)
+    _xmf_wget=$(command -v wget 2>/dev/null || :)
+    for _xmf_candidate in $_xmf_candidates; do
+        rm -f "$_xmf_out"
+        if [ -n "$_xmf_curl" ] && [ -x "$_xmf_curl" ]; then
+            if [ -n "$_xmf_range" ]; then
+                "$_xmf_curl" -fLsS --connect-timeout 4 --max-time "$_xmf_timeout" \
+                    --range "$_xmf_range" -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || :
+            else
+                "$_xmf_curl" -fLsS --connect-timeout 4 --max-time "$_xmf_timeout" \
+                    -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || :
+            fi
+            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+        fi
+        rm -f "$_xmf_out"
+        if [ -z "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
+            # -T controls read/connect timeout; -t 1 prevents wget retrying forever.
+            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -t 1 -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
+            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+        fi
+        rm -f "$_xmf_out"
+    done
+    # wget is a fallback after all bounded curl attempts. Do not invoke it unless
+    # it is installed; its retries are explicitly capped to a single attempt.
+    if [ -n "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
+        for _xmf_candidate in $_xmf_candidates; do
+            rm -f "$_xmf_out"
+            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -t 1 -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
+            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+            rm -f "$_xmf_out"
+        done
+    fi
+    rm -f "$_xmf_out"
+    return 1
+}
+
+xmenu_extract_version() {
+    [ -r "$1" ] || return 1
+    sed -n 's/^[[:space:]]*APP_VERSION[[:space:]]*=[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$1" | sed -n '1p'
+}
+
+xmenu_valid_version() {
+    case "$1" in ''|*[!0-9.]*|.*|*..*|*.) return 1 ;; esac
+    return 0
+}
+
+xmenu_update_cache_is_fresh() {
+    [ -r "$XMENU_UPDATE_CACHE" ] || return 1
+    _xcf_checked=$(sed -n 's/^checked=//p' "$XMENU_UPDATE_CACHE" | sed -n '1p')
+    case "$_xcf_checked" in ''|*[!0-9]*) return 1 ;; esac
+    _xcf_now=$(date +%s 2>/dev/null || printf '0')
+    case "$_xcf_now" in ''|*[!0-9]*) return 1 ;; esac
+    [ $((_xcf_now - _xcf_checked)) -ge 0 ] 2>/dev/null || return 1
+    [ $((_xcf_now - _xcf_checked)) -lt 600 ] 2>/dev/null || return 1
+    return 0
+}
+
+xmenu_cached_remote_version() {
+    xmenu_update_cache_is_fresh || return 1
+    _xcr_version=$(sed -n 's/^version=//p' "$XMENU_UPDATE_CACHE" | sed -n '1p')
+    xmenu_valid_version "$_xcr_version" || return 1
+    printf '%s' "$_xcr_version"
+}
+
+xmenu_remote_version_probe() {
+    _xrv_tmp="/tmp/xmenu-version-$$"
+    rm -f "$_xrv_tmp"
+    # Usually APP_VERSION is in the first few bytes; use a bounded range so the
+    # menu can display the available version without downloading the full script.
+    if xmenu_fetch_file "$XMENU_UPDATE_URL" "$_xrv_tmp" 7 0-4095; then
+        _xrv_version=$(xmenu_extract_version "$_xrv_tmp")
+        if xmenu_valid_version "$_xrv_version" &&
+           [ "$(head -n 1 "$_xrv_tmp" 2>/dev/null | tr -d '\r')" = '#!/bin/sh' ] &&
+           grep -q '^APP_VERSION=' "$_xrv_tmp"; then
+            rm -f "$_xrv_tmp"
+            printf '%s' "$_xrv_version"
+            return 0
+        fi
+    fi
+    rm -f "$_xrv_tmp"
+    return 1
+}
+
+xmenu_update_check_worker() {
+    _xuw_parent=$1
+    _xuw_tmp="$ROOT_DIR/.xmenu-update-cache.$$"
+    _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
+    {
+        printf 'checked=%s\n' "$(date +%s 2>/dev/null || printf 0)"
+        printf 'version=%s\n' "$_xuw_version"
+    } > "$_xuw_tmp" 2>/dev/null && mv -f "$_xuw_tmp" "$XMENU_UPDATE_CACHE" 2>/dev/null || rm -f "$_xuw_tmp"
+    if xmenu_valid_version "$_xuw_version" && version_is_older "$APP_VERSION" "$_xuw_version"; then
+        kill -USR1 "$_xuw_parent" 2>/dev/null || :
+    fi
+    if [ "$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)" = "$_xuw_parent" ]; then
+        rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
+    fi
+}
+
+xmenu_start_update_check() {
+    # Also cache negative results for 10 minutes to avoid repeating failed
+    # network checks on every menu launch when GitHub/CDNs are unreachable.
+    xmenu_update_cache_is_fresh && return 0
+    mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
+    if ! mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null; then
+        _xsc_stale_pid=$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)
+        case "$_xsc_stale_pid" in ''|*[!0-9]*) _xsc_stale_pid='' ;; esac
+        if [ -z "$_xsc_stale_pid" ] || ! kill -0 "$_xsc_stale_pid" 2>/dev/null; then
+            rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
+            mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null || return 0
+        else
+            return 0
+        fi
+    fi
+    printf '%s\n' "$$" > "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || { rm -rf "$XMENU_UPDATE_LOCK"; return 1; }
+    ( xmenu_update_check_worker "$$" ) </dev/null >/dev/null 2>&1 &
+    XMENU_UPDATE_CHECK_PID=$!
+    printf '%s\n' "$XMENU_UPDATE_CHECK_PID" > "$XMENU_UPDATE_LOCK/check_pid" 2>/dev/null || :
+    return 0
+}
+
+xmenu_read_menu_prompt() {
+    _xrmp_prompt=$1
+    printf '%b' "$_xrmp_prompt"
+    if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+        _read_or_eof ''
+        return $?
+    fi
+    while :; do
+        if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
+            XMENU_UPDATE_REDRAW=0
+            printf '\n'
+            return 2
+        fi
+        IFS= read -r -t 1 _read_value </dev/tty
+        _xrmp_rc=$?
+        if [ "$_xrmp_rc" -eq 0 ]; then
+            _read_value=$(printf '%s' "$_read_value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            return 0
+        fi
+        # A signal can interrupt read with a non-timeout status: prioritize the
+        # redraw flag before deciding that this ash lacks read -t support.
+        if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
+            XMENU_UPDATE_REDRAW=0
+            printf '\n'
+            return 2
+        fi
+        if [ "${INTERRUPTED:-0}" = 1 ]; then return 1; fi
+        # BusyBox ash returns 1 for a read timeout. If -t is unsupported, use
+        # the normal blocking prompt as a portable fallback.
+        if [ "$_xrmp_rc" -gt 1 ]; then
+            _read_or_eof ''
+            return $?
+        fi
+    done
+}
+
+# Обновляет Xmenu без зависимости от opkg. Проверенный скрипт атомарно заменяет
+# /opt/bin/xmenu, затем немедленно перезапускает новое меню.
 update_xmenu_script() {
-    ensure_network || return 1
     _ux_target='/opt/bin/xmenu'
     _ux_tmp="/opt/bin/.xmenu-update.$$"
     rm -f "$_ux_tmp"
-    say 'Проверяю обновление Xmenu на GitHub...'
-    if ! fetch "$XMENU_UPDATE_URL" "$_ux_tmp" 180; then
+    say "Проверяю Xmenu v$APP_VERSION и ищу актуальный код на GitHub/зеркалах..."
+    if ! xmenu_fetch_file "$XMENU_UPDATE_URL" "$_ux_tmp" 15; then
         rm -f "$_ux_tmp"
-        say "${RED}Не удалось скачать обновление Xmenu. Установленная версия не изменена.${RESET}"
+        say "${RED}Не удалось скачать обновление Xmenu через GitHub и зеркала. Текущая версия не изменена.${RESET}"
         return 1
     fi
     _ux_size=$(wc -c < "$_ux_tmp" 2>/dev/null | tr -d ' ')
@@ -2575,13 +2841,36 @@ update_xmenu_script() {
        ! grep -q '^APP_VERSION=' "$_ux_tmp" ||
        ! grep -q '^XMENU_UPDATE_URL=' "$_ux_tmp" ||
        ! grep -q '^update_xmenu_script()' "$_ux_tmp" ||
+       ! grep -q '^opkg_settings_menu()' "$_ux_tmp" ||
        ! grep -q '^render_menu()' "$_ux_tmp" ||
        ! grep -q '^main "\$@"' "$_ux_tmp" ||
-       response_looks_like_error_page "$_ux_tmp" ||
-       ! sh -n "$_ux_tmp"; then
+       response_looks_like_error_page "$_ux_tmp" || ! sh -n "$_ux_tmp"; then
         rm -f "$_ux_tmp"
-        say "${RED}Проверка обновления не пройдена. Установленная версия не изменена.${RESET}"
+        say "${RED}Проверка обновления не пройдена. Нужен полный Xmenu с настройками OPKG; текущая версия не изменена.${RESET}"
         return 1
+    fi
+    _ux_remote_version=$(xmenu_extract_version "$_ux_tmp")
+    xmenu_valid_version "$_ux_remote_version" || {
+        rm -f "$_ux_tmp"
+        say "${RED}В загруженном файле отсутствует корректная APP_VERSION. Текущий скрипт сохранён.${RESET}"
+        return 1
+    }
+    if [ "$_ux_remote_version" = "$APP_VERSION" ]; then
+        rm -f "$_ux_tmp"
+        say "${GREEN}Установлена актуальная Xmenu v$APP_VERSION.${RESET}"
+        return 0
+    fi
+    if version_is_older "$_ux_remote_version" "$APP_VERSION"; then
+        rm -f "$_ux_tmp"
+        say "${YELLOW}На сервере Xmenu v$_ux_remote_version, но локально v$APP_VERSION. Откат запрещён; проверь файл $XMENU_UPDATE_URL.${RESET}"
+        return 1
+    else
+        _ux_compare_rc=$?
+        if [ "$_ux_compare_rc" -eq 2 ]; then
+            rm -f "$_ux_tmp"
+            say "${RED}Не удалось сравнить версии; текущая версия не изменена.${RESET}"
+            return 1
+        fi
     fi
     if [ -f "$_ux_target" ]; then
         backup_file "$_ux_target" || { rm -f "$_ux_tmp"; say "${RED}Не удалось сохранить резервную копию Xmenu.${RESET}"; return 1; }
@@ -2589,9 +2878,156 @@ update_xmenu_script() {
     chmod 700 "$_ux_tmp" || { rm -f "$_ux_tmp"; return 1; }
     mv -f "$_ux_tmp" "$_ux_target" || { rm -f "$_ux_tmp"; return 1; }
     chmod 700 "$_ux_target" 2>/dev/null || :
-    say "${GREEN}Xmenu обновлён.${RESET}"
-    say 'Выйди из меню и запусти /opt/bin/xmenu (или xmenu, если /opt/bin находится в PATH).'
+    rm -f "$XMENU_UPDATE_CACHE"
+    say "${GREEN}Xmenu обновлён до v$_ux_remote_version. Перезапускаю новое меню...${RESET}"
+    exec "$_ux_target"
+}
+
+# Определяет/переключает только официальные зеркала Entware в /opt/etc/opkg.conf.
+# Источники сторонних репозиториев и файлы /opt/etc/opkg/*.conf не меняются.
+xmenu_opkg_mirror_label() {
+    case "$1" in
+        *bin.entware.net*) printf 'Entware official (HTTP)' ;;
+        *mirrors.bfsu.edu.cn*) printf 'BFSU mirror (HTTPS)' ;;
+        *mirrors.cqupt.edu.cn*) printf 'CQUPT mirror (HTTPS)' ;;
+        *mirrors.nju.edu.cn*) printf 'NJU mirror (HTTPS)' ;;
+        *entware.diversion.ch*) printf 'Diversion mirror (HTTPS)' ;;
+        *) printf 'custom / unknown' ;;
+    esac
+}
+
+xmenu_opkg_set_mirror() {
+    _osm_base=$1
+    case "$_osm_base" in
+        http://bin.entware.net|https://mirrors.bfsu.edu.cn/entware|https://mirrors.cqupt.edu.cn/entware|https://mirrors.nju.edu.cn/entware|https://entware.diversion.ch) : ;;
+        *) say "${RED}Неизвестное зеркало Entware; изменение отменено.${RESET}"; return 2 ;;
+    esac
+    _osm_conf=/opt/etc/opkg.conf
+    _osm_tmp="/opt/etc/.opkg.conf.xmenu.$$"
+    [ -r "$_osm_conf" ] || { say "${RED}Не найден $_osm_conf.${RESET}"; return 1; }
+    rm -f "$_osm_tmp"
+    awk -v base="$_osm_base" '
+        function mirror_url(url, rest, host, path) {
+            rest=url
+            sub(/^https?:\/\//, "", rest)
+            host=rest
+            sub(/\/.*$/, "", host)
+            path=substr(rest, length(host)+1)
+            if (host == "bin.entware.net" || host == "entware.diversion.ch") {
+                # These mirrors publish the architecture directory at the root.
+            } else if (host == "mirrors.bfsu.edu.cn" || host == "mirrors.cqupt.edu.cn" || host == "mirrors.nju.edu.cn") {
+                if (path ~ /^\/entware(\/|$)/) sub(/^\/entware/, "", path)
+            } else {
+                return ""
+            }
+            if (path == "") path="/"
+            return base path
+        }
+        {
+            line=$0
+            if ($1 == "src/gz" && NF >= 3) {
+                url=$3
+                sub(/\r$/, "", url)
+                replacement=mirror_url(url)
+                if (replacement != "") {
+                    matched++
+                    if (match(line, /https?:\/\/[^[:space:]]+/)) {
+                        line=substr(line, 1, RSTART-1) replacement substr(line, RSTART+RLENGTH)
+                    }
+                }
+            }
+            print line
+        }
+        END { if (matched == 0) exit 4 }
+    ' "$_osm_conf" > "$_osm_tmp"
+    _osm_rc=$?
+    if [ "$_osm_rc" -ne 0 ] || [ ! -s "$_osm_tmp" ]; then
+        rm -f "$_osm_tmp"
+        say "${YELLOW}В $_osm_conf не найдено распознаваемых источников официальных зеркал Entware. Файл не изменён.${RESET}"
+        say 'Проверь строки src/gz в /opt/etc/opkg.conf; кастомные и сторонние репозитории автоматически не переписываются.'
+        return 1
+    fi
+    if ! cmp -s "$_osm_conf" "$_osm_tmp" 2>/dev/null; then
+        backup_file "$_osm_conf" || { rm -f "$_osm_tmp"; say "${RED}Не удалось сохранить резервную копию opkg.conf.${RESET}"; return 1; }
+        chmod 644 "$_osm_tmp" 2>/dev/null || :
+        mv -f "$_osm_tmp" "$_osm_conf" || { rm -f "$_osm_tmp"; say "${RED}Не удалось активировать новую конфигурацию OPKG.${RESET}"; return 1; }
+        say "${GREEN}Зеркало Entware переключено на: $(xmenu_opkg_mirror_label "$_osm_base").${RESET}"
+        say 'Настройка сохранена. opkg update автоматически не запускается, чтобы не блокировать меню при проблемах с сетью.'
+    else
+        rm -f "$_osm_tmp"
+        say "${GREEN}Уже используется выбранное зеркало: $(xmenu_opkg_mirror_label "$_osm_base").${RESET}"
+    fi
     return 0
+}
+
+xmenu_opkg_restore_config() {
+    _orc_conf=/opt/etc/opkg.conf
+    _orc_latest=$(ls -1t "$BACKUP_DIR"/opkg.conf.*.bak 2>/dev/null | sed -n '1p')
+    [ -n "$_orc_latest" ] && [ -r "$_orc_latest" ] || { say 'Резервная копия opkg.conf не найдена.'; return 1; }
+    say "Восстановить $_orc_latest? Текущая конфигурация тоже будет сохранена в резервную копию."
+    confirm 'Восстановить резервную копию OPKG?' || { say 'Восстановление отменено.'; return 1; }
+    backup_file "$_orc_conf" || return 1
+    _orc_tmp="/opt/etc/.opkg.conf.restore.$$"
+    cp -p "$_orc_latest" "$_orc_tmp" || { rm -f "$_orc_tmp"; return 1; }
+    mv -f "$_orc_tmp" "$_orc_conf" || { rm -f "$_orc_tmp"; return 1; }
+    say "${GREEN}Конфигурация OPKG восстановлена из бэкапа.${RESET}"
+}
+
+opkg_settings_menu() {
+    _osm_lang=$(get_ui_lang)
+    while :; do
+        line
+        if [ "$_osm_lang" = en ]; then
+            say "${WHITE}OPKG settings${RESET}"
+            say 'Current Entware source lines:'
+        else
+            say "${WHITE}Настройки OPKG / зеркала Entware${RESET}"
+            say 'Текущие строки источников из /opt/etc/opkg.conf:'
+        fi
+        if [ -r /opt/etc/opkg.conf ]; then
+            grep -E '^[[:space:]]*src/gz[[:space:]]+' /opt/etc/opkg.conf || say '(src/gz entries not found)'
+        else
+            say '/opt/etc/opkg.conf не найден.'
+        fi
+        say ''
+        if [ "$_osm_lang" = en ]; then
+            menu_item 1 'Official Entware mirror (HTTP)'
+            menu_item 2 'BFSU mirror (HTTPS)'
+            menu_item 3 'CQUPT mirror (HTTPS)'
+            menu_item 4 'NJU mirror (HTTPS)'
+            menu_item 5 'Diversion mirror (HTTPS)'
+            menu_item 6 'Run opkg update now (may hang if network is slow)'
+            menu_item 7 'Restore latest opkg.conf backup'
+            menu_item 0 'Back'
+            _osm_prompt='[?] Select an option: '
+        else
+            menu_item 1 'Официальное зеркало Entware (HTTP)'
+            menu_item 2 'Зеркало BFSU (HTTPS)'
+            menu_item 3 'Зеркало CQUPT (HTTPS)'
+            menu_item 4 'Зеркало NJU (HTTPS)'
+            menu_item 5 'Зеркало Diversion (HTTPS)'
+            menu_item 6 'Запустить opkg update сейчас (при медленной сети может зависать)'
+            menu_item 7 'Восстановить последнюю копию opkg.conf'
+            menu_item 0 'Назад'
+            _osm_prompt='[?] Выбери пункт: '
+        fi
+        _read_or_eof "$_osm_prompt" || return 0
+        case "$_read_value" in
+            1) xmenu_opkg_set_mirror 'http://bin.entware.net'; _osm_rc=$?; pause ;;
+            2) xmenu_opkg_set_mirror 'https://mirrors.bfsu.edu.cn/entware'; _osm_rc=$?; pause ;;
+            3) xmenu_opkg_set_mirror 'https://mirrors.cqupt.edu.cn/entware'; _osm_rc=$?; pause ;;
+            4) xmenu_opkg_set_mirror 'https://mirrors.nju.edu.cn/entware'; _osm_rc=$?; pause ;;
+            5) xmenu_opkg_set_mirror 'https://entware.diversion.ch'; _osm_rc=$?; pause ;;
+            6)
+                say 'opkg update обновляет индексы репозитория, это не обновление установленных пакетов.'
+                say 'Если загрузка снова зависнет, нажми Ctrl+C. Зеркало останется выбранным.'
+                confirm 'Выполнить opkg update?' && opkg update
+                pause ;;
+            7) xmenu_opkg_restore_config; pause ;;
+            0|'') return 0 ;;
+            *) say 'Неверный пункт.'; sleep 1 ;;
+        esac
+    done
 }
 
 change_ui_language() {
@@ -2731,6 +3167,14 @@ render_menu() {
     _title_pad_text=''
     printf '%s%s %s%s%s %s\n' \
         "$_title_pad_text" "${PURPLE}|${RESET}" "$WHITE" "$_title" "$RESET" "${PURPLE}|${RESET}"
+    _latest_xmenu=$(xmenu_cached_remote_version 2>/dev/null || :)
+    if [ -n "$_latest_xmenu" ] && version_is_older "$APP_VERSION" "$_latest_xmenu"; then
+        if [ "$_lang" = en ]; then
+            say "${GREEN}Update available: Xmenu v$_latest_xmenu (menu option 23)${RESET}"
+        else
+            say "${GREEN}Доступно обновление Xmenu v$_latest_xmenu (пункт меню 23)${RESET}"
+        fi
+    fi
     say ''
 
     # Architecture uses nfqws-menu order: opkg print-architecture -> opkg.conf -> uname -m.
@@ -2785,10 +3229,11 @@ render_menu() {
         menu_item 19 'Status and versions'
         menu_item 20 'Change language: RU / EN'
         say ''
-        say "${PURPLE}[::]  Package removal:${RESET}"
+        say "${PURPLE}[::]  Maintenance / settings:${RESET}"
         menu_item 21 'Remove components'
         menu_item 22 'Remove Xmenu'
         menu_item 23 'Update Xmenu from GitHub'
+        menu_item 24 'OPKG settings / Entware mirrors'
         menu_item 0  'Exit'
         _prompt='[?] Select an option [Enter = exit]: '
     else
@@ -2820,10 +3265,11 @@ render_menu() {
         menu_item 19 'Статус и версии'
         menu_item 20 'Сменить язык: RU / EN'
         say ''
-        say "${PURPLE}[::]  Удаление пакетов:${RESET}"
+        say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
         menu_item 21 'Удаление компонентов'
         menu_item 22 'Удалить Xmenu'
         menu_item 23 'Обновить Xmenu с GitHub'
+        menu_item 24 'Настройки OPKG / зеркала Entware'
         menu_item 0  'Выход'
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
@@ -3208,8 +3654,12 @@ main() {
         install-keenkit) install_keenkit; return $? ;;
         install-awg-manager) install_awg_manager; return $? ;;
         backup) backup_configs; return $? ;;
+        opkg-settings) opkg_settings_menu; return $? ;;
+        update-xmenu) update_xmenu_script; return $? ;;
         *) : ;;
     esac
+    # Проверка последней версии работает в фоне: меню не ждёт GitHub/зеркала и не зависит от opkg.
+    xmenu_start_update_check || :
     # Первое открытие не запускает установку компонентов и не показывает предупреждений.
     while :; do
         render_menu
@@ -3217,9 +3667,10 @@ main() {
         MENU_READING=1
         _menu_lang=$(get_ui_lang)
         if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [Enter = exit]: '; else _prompt='[?] Выберите пункт [Enter = выход]: '; fi
-        _read_or_eof "${LAVENDER}$_prompt${RESET}"
+        xmenu_read_menu_prompt "${LAVENDER}$_prompt${RESET}"
         _read_rc=$?
         MENU_READING=0
+        if [ "$_read_rc" -eq 2 ]; then continue; fi
         if [ "$_read_rc" -ne 0 ]; then
             if [ "${INTERRUPTED:-0}" = 1 ]; then
                 INTERRUPTED=0
@@ -3261,6 +3712,7 @@ main() {
             21) remove_components_menu; invalidate_core_version_cache ;;
             22) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
             23) update_xmenu_script || pause ;;
+            24) opkg_settings_menu ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
@@ -3309,4 +3761,3 @@ install_xmenu_command() {
 install_xmenu_command || :
 
 main "$@"
-
