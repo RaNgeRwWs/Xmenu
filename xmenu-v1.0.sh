@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.2.1 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.2.1"
+# Xmenu ◆ v1.2.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.2.2"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -582,7 +582,14 @@ backup_file() {
     [ -f "$_f" ] || return 0
     mkdir -p "$BACKUP_DIR" || return 1
     _ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null); [ -n "$_ts" ] || _ts="backup-$$"
-    _dest="$BACKUP_DIR/$(basename "$_f").$_ts.bak"
+    _dest_base="$BACKUP_DIR/$(basename "$_f").$_ts"
+    _dest="$_dest_base.bak"
+    _backup_seq=1
+    # Do not overwrite an earlier backup created during the same second.
+    while [ -e "$_dest" ] || [ -L "$_dest" ]; do
+        _dest="$_dest_base.$_backup_seq.bak"
+        _backup_seq=$((_backup_seq + 1))
+    done
     cp -p "$_f" "$_dest" || { say "${RED}Не удалось создать бэкап $_f${RESET}"; return 1; }
     say "${MUTED}Бэкап: $_dest${RESET}"
 }
