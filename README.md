@@ -26,9 +26,7 @@
 **Вариант A — curl (рекомендуется):**
 
 ```sh
-curl -fLsS --retry 3 --connect-timeout 8 --max-time 90 \
-  -o /tmp/xmenu.sh \
-  https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
+mkdir -p /opt/bin && curl -fsSL --retry 3 -o /tmp/xmenu.sh https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu /opt/bin/xmenu.bak; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && sh /opt/bin/xmenu
 ```
 
 **Вариант B — wget, если curl не установлен:**
