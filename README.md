@@ -61,7 +61,7 @@ if [ -e "$DEST" ]; then
   echo "Старая версия сохранена: $BACKUP"
 fi
 
-TMP="$DEST.tmp.$"
+TMP="${DEST}.tmp.$"
 cp "$SCRIPT" "$TMP"
 chmod 700 "$TMP"
 mv "$TMP" "$DEST"
