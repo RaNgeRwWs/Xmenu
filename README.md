@@ -26,15 +26,15 @@
 **Вариант A — curl (рекомендуется):**
 
 \`\`\`sh
-curl -fLsS --retry 3 --connect-timeout 8 --max-time 90 \\
-  -o /tmp/xmenu.sh \\
+curl -fLsS --retry 3 --connect-timeout 8 --max-time 90 \
+  -o /tmp/xmenu.sh \
   https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
 \`\`\`
 
 **Вариант B — wget, если curl не установлен:**
 
 \`\`\`sh
-wget -O /tmp/xmenu.sh \\
+wget -O /tmp/xmenu.sh \
   https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh
 \`\`\`
 
@@ -50,7 +50,7 @@ set -e
 test -s /tmp/xmenu.sh
 test "$(wc -c < /tmp/xmenu.sh | tr -d ' ')" -ge 25000
 grep -q '^APP_VERSION=' /tmp/xmenu.sh
-grep -q '^main "\\$@"' /tmp/xmenu.sh
+grep -q '^main "\$@"' /tmp/xmenu.sh
 sh -n /tmp/xmenu.sh
 
 mkdir -p /opt/bin
