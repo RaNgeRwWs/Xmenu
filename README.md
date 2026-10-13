@@ -35,12 +35,6 @@ mkdir -p /opt/bin && wget -O /tmp/xmenu.sh 'https://raw.githubusercontent.com/ra
 mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
-### 4. ghproxy — дополнительный маршрут
-
-```sh
-mkdir -p /opt/bin && curl -fL --retry 3 'https://ghproxy.net/https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
-```
-
 Каждая команда сначала проверяет синтаксис загруженного скрипта, затем сохраняет прежний `/opt/bin/xmenu` и запускает новую копию. Для способов 1, 3 и 4 нужен `curl`; если он не установлен, выполни `opkg update && opkg install curl`. Для способа 2 нужен `wget`. При проблеме с одним адресом попробуй следующий.
 
 После установки меню открывается командой:
