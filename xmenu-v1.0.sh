@@ -3716,7 +3716,7 @@ xmenu_opkg_active_mirror_url() {
 # часто возвращают страницу блокировки с HTTP 200.
 xmenu_opkg_is_packages_index() {
     [ -s "$1" ] || return 1
-    _opmi_magic=$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d '[:space:]')
+    _opmi_magic=$(dd if="$1" bs=1 count=2 2>/dev/null | od -tx1 2>/dev/null | awk 'NR==1 {print $2 $3}' | tr -d '[:space:]')
     [ "$_opmi_magic" = 1f8b ]
 }
 
