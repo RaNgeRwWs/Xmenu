@@ -4172,16 +4172,10 @@ render_menu() {
     fi
     _r=$_XMENU_DEVICE_INFO_CACHE
     _model=${_r%%|*}; _fw=${_r#*|}; _arch=$_XMENU_ARCH_CACHE
-    # Заголовок смещён на двенадцать знакомест влево относительно центра рамки.
-    # Длину UTF-8 считаем в видимых символах (◆ занимает один столбец).
+    # У заголовка постоянный отступ в 12 знакомест, как в образце интерфейса.
     _title="Xmenu ◆ v$APP_VERSION"
-    _title_cells=$(printf '%s\n' "$_title" | LC_ALL=C awk '{s=$0; gsub(/[\200-\277]/, "", s); print length(s)}')
-    case "$_title_cells" in ''|*[!0-9]*) _title_cells=12 ;; esac
-    _title_pad=$(((_XMENU_RENDER_WIDTH - _title_cells) / 2 - 12))
-    [ "$_title_pad" -ge 0 ] || _title_pad=0
     XMENU_UPDATE_NOTICE_VISIBLE=0
-    line
-    printf '%*s%s%s%s\n' "$_title_pad" '' "$WHITE" "$_title" "$RESET"
+    printf '%12s%s%s%s\n' '' "$WHITE" "$_title" "$RESET"
     line
 
     # Architecture uses nfqws-menu order: opkg print-architecture -> opkg.conf -> uname -m.

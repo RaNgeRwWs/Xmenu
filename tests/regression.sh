@@ -197,9 +197,11 @@ update_line=$(grep -n '↑ Доступно обновление' "$test_dir/pla
 check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-menu.txt" | cut -d: -f1)
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
 LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
-    text=$0; sub(/^ */, "", text); gsub(/[\200-\277]/, "", text)
-    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)-12) exit 1; found=1
-} END {if (!found) exit 1}' "$test_dir/plain-menu.txt" || fail 'title not centered in frame'
+    match($0, /[^ ]/); if (RSTART-1 != 12) exit 1
+    title_line=NR; found=1
+} title_line && NR == title_line + 1 && $0 !~ /^=+$/ {exit 1}
+  title_line && NR == title_line + 2 && $0 !~ /Модель:/ {exit 1}
+END {if (!found || !title_line) exit 1}' "$test_dir/plain-menu.txt" || fail 'title header must have 12-space indent followed by divider and model'
 
 # Открытие двух меню не должно удерживать общий lock сессии.
 configure_locale() { return 0; }
