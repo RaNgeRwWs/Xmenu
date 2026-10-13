@@ -1,6 +1,6 @@
 #!/bin/sh
 # Xmenu ◆ v1.3.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.3.0"
+APP_VERSION="1.3.1"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -2265,25 +2265,52 @@ acquire_menu_session_lock() {
     mkdir -p "$(dirname "$MENU_SESSION_LOCK_DIR")" || return 1
     if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
         MENU_SESSION_LOCK_HELD=1
-        printf '%s\n' "$$" > "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :
+        _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
+        printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
+            mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
+                rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
+                rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
+                MENU_SESSION_LOCK_HELD=0
+                say 'Не удалось создать блокировку сессии Xmenu.'
+                return 1
+            }
         return 0
     fi
     _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
     case "$_menu_lock_pid" in
-        ''|*[!0-9]*) : ;;
+        '')
+            # mkdir is atomic, but the winning process still needs a moment to
+            # publish its PID. Never remove an empty lock immediately: that
+            # race allowed two simultaneous launches to both enter the menu.
+            _menu_lock_wait=0
+            while [ "$_menu_lock_wait" -lt 10 ] && [ ! -s "$MENU_SESSION_LOCK_DIR/pid" ]; do
+                sleep 0.1
+                _menu_lock_wait=$((_menu_lock_wait + 1))
+            done
+            _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
+            ;;
+        *[!0-9]*) : ;;
         *)
             if ! kill -0 "$_menu_lock_pid" 2>/dev/null; then
                 rm -f "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :
+                rm -f "$MENU_SESSION_LOCK_DIR"/.pid.* 2>/dev/null || :
                 rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
                 if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
                     MENU_SESSION_LOCK_HELD=1
-                    printf '%s\n' "$$" > "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :
+                    _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
+                    printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
+                        mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
+                            rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
+                            rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
+                            MENU_SESSION_LOCK_HELD=0
+                            return 1
+                        }
                     return 0
                 fi
             fi
             ;;
     esac
-    say 'Меню Xmenu уже открыто в другой SSH-сессии. Закрой его или дождись завершения.'
+    say 'Меню Xmenu уже открыто или запускается в другой SSH-сессии. Закрой его или дождись завершения.'
     return 1
 }
 
@@ -3113,7 +3140,13 @@ xmenu_update_cache_is_fresh() {
     _xcf_now=$(date +%s 2>/dev/null || printf '0')
     case "$_xcf_now" in ''|*[!0-9]*) return 1 ;; esac
     [ $((_xcf_now - _xcf_checked)) -ge 0 ] 2>/dev/null || return 1
-    [ $((_xcf_now - _xcf_checked)) -lt 600 ] 2>/dev/null || return 1
+    _xcf_version=$(sed -n 's/^version=//p' "$XMENU_UPDATE_CACHE" | sed -n '1p')
+    # A failed probe is only cached briefly. A transient GitHub/CDN outage must
+    # not hide a newly published update for the full successful-cache window.
+    case "$_xcf_version" in
+        unknown|'') [ $((_xcf_now - _xcf_checked)) -lt 60 ] 2>/dev/null || return 1 ;;
+        *) [ $((_xcf_now - _xcf_checked)) -lt 600 ] 2>/dev/null || return 1 ;;
+    esac
     return 0
 }
 
@@ -3231,8 +3264,7 @@ xmenu_update_check_worker() {
 }
 
 xmenu_start_update_check() {
-    # Also cache negative results for 10 minutes to avoid repeating failed
-    # network checks on every menu launch when GitHub/CDNs are unreachable.
+    # Successful results are cached for 10 minutes; failures only for 60 seconds.
     xmenu_update_cache_is_fresh && return 0
     mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
     if ! mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null; then
@@ -3446,6 +3478,13 @@ xmenu_opkg_set_mirror() {
 xmenu_opkg_check_mirrors() {
     _ocm_conf=/opt/etc/opkg.conf
     [ -r "$_ocm_conf" ] || { say "Не найден $_ocm_conf."; return 1; }
+    _ocm_active_host=$(awk '
+        ($1 == "src/gz" || $1 == "src") && NF >= 3 {
+            url=$3; sub(/\r$/, "", url); sub(/^https?:\/\//, "", url)
+            host=url; sub(/\/.*$/, "", host)
+            if (host == "bin.entware.net" || host == "entware.diversion.ch" || host == "mirrors.bfsu.edu.cn" || host == "mirrors.cqupt.edu.cn" || host == "mirrors.nju.edu.cn") { print host; exit }
+        }
+    ' "$_ocm_conf")
     _ocm_path=$(awk '
         ($1 == "src/gz" || $1 == "src") && NF >= 3 {
             url=$3; sub(/\r$/, "", url); rest=url; sub(/^https?:\/\//, "", rest)
@@ -3458,8 +3497,22 @@ xmenu_opkg_check_mirrors() {
         }
     ' "$_ocm_conf")
     [ -n "$_ocm_path" ] || { say "Не найдена строка официального Entware feed в $_ocm_conf."; return 1; }
-    say 'Проверяю доступ к репозиторию пакетов (таймаут до 6 секунд на зеркало)...'
+    _ocm_lang=$(get_ui_lang)
+    line
+    if [ "$_ocm_lang" = en ]; then
+        say "${WHITE}◆ ENTWARE MIRROR AVAILABILITY${RESET}"
+        say 'Each mirror is checked against the Packages.gz index (up to 6 seconds).'
+        [ -n "$_ocm_active_host" ] && say "Active source: ${CYAN}$_ocm_active_host${RESET}"
+    else
+        say "${WHITE}◆ ДОСТУПНОСТЬ ЗЕРКАЛ ENTWARE${RESET}"
+        say 'Проверяю индекс Packages.gz (до 6 секунд на каждое зеркало).'
+        [ -n "$_ocm_active_host" ] && say "Активный источник: ${CYAN}$_ocm_active_host${RESET}"
+    fi
+    line
+    _ocm_available=0
+    _ocm_total=0
     for _ocm_base in 'http://bin.entware.net' 'https://mirrors.bfsu.edu.cn/entware' 'https://mirrors.cqupt.edu.cn/entware' 'https://mirrors.nju.edu.cn/entware' 'https://entware.diversion.ch'; do
+        _ocm_total=$((_ocm_total + 1))
         _ocm_url="$_ocm_base$_ocm_path/Packages.gz"
         _ocm_label=$(xmenu_opkg_mirror_label "$_ocm_base")
         _ocm_ok=0
@@ -3470,8 +3523,26 @@ xmenu_opkg_check_mirrors() {
             _ocm_wget=$(command -v wget 2>/dev/null || printf '')
             if [ -n "$_ocm_wget" ] && [ -x "$_ocm_wget" ] && "$_ocm_wget" -q -T 6 -O /dev/null "$_ocm_url"; then _ocm_ok=1; fi
         fi
-        if [ "$_ocm_ok" = 1 ]; then say "  ДОСТУПНО — $_ocm_label"; else say "  НЕДОСТУПНО — $_ocm_label"; fi
+        _ocm_host=${_ocm_base#*://}
+        _ocm_host=${_ocm_host%%/*}
+        _ocm_marker=''
+        [ "$_ocm_host" = "$_ocm_active_host" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  [ACTIVE]'; else _ocm_marker='  [ТЕКУЩЕЕ]'; fi; }
+        if [ "$_ocm_ok" = 1 ]; then
+            _ocm_available=$((_ocm_available + 1))
+            if [ "$_ocm_lang" = en ]; then say "  ${GREEN}● AVAILABLE${RESET}   $_ocm_label$_ocm_marker"; else say "  ${GREEN}● ДОСТУПНО${RESET}    $_ocm_label$_ocm_marker"; fi
+        else
+            if [ "$_ocm_lang" = en ]; then say "  ${RED}● UNAVAILABLE${RESET} $_ocm_label$_ocm_marker"; else say "  ${RED}● НЕДОСТУПНО${RESET} $_ocm_label$_ocm_marker"; fi
+        fi
     done
+    line
+    if [ "$_ocm_lang" = en ]; then
+        say "Available: ${GREEN}$_ocm_available${RESET} / $_ocm_total"
+        say 'Choose an available mirror in OPKG settings, then run opkg update if needed.'
+    else
+        say "Доступно: ${GREEN}$_ocm_available${RESET} из $_ocm_total"
+        say 'Выбери доступное зеркало в настройках OPKG; при необходимости отдельно запусти opkg update.'
+    fi
+    line
 }
 
 xmenu_opkg_restore_config() {
@@ -3512,7 +3583,8 @@ opkg_settings_menu() {
             menu_item 5 'Diversion mirror (HTTPS)'
             menu_item 6 'Run opkg update now (may hang if network is slow)'
             menu_item 7 'Restore latest opkg.conf backup'
-            menu_item 8 'Check available Entware mirrors'
+            say "${CYAN}◆  Connection check${RESET}"
+            menu_item 8 'Check Entware mirror availability'
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
         else
@@ -3523,6 +3595,7 @@ opkg_settings_menu() {
             menu_item 5 'Зеркало Diversion (HTTPS)'
             menu_item 6 'Запустить opkg update сейчас (при медленной сети может зависать)'
             menu_item 7 'Восстановить последнюю копию opkg.conf'
+            say "${CYAN}◆  Проверка подключения${RESET}"
             menu_item 8 'Проверить доступность зеркал Entware'
             menu_item 0 'Назад'
             _osm_prompt='[?] Выбери пункт: '
