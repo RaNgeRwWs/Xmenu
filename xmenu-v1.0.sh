@@ -3218,10 +3218,10 @@ check_xmenu_update_now() {
 
     if version_is_older "$APP_VERSION" "$_cxu_version"; then
         if [ "$_cxu_lang" = en ]; then
-            say "${GREEN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
+            say "${CYAN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
             say 'Choose option 22 — Update Xmenu from GitHub to install it.'
         else
-            say "${GREEN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
+            say "${CYAN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
             say 'Для установки выбери пункт 22 — «Обновить Xmenu с GitHub».'
         fi
         XMENU_MANUAL_UPDATE_CHECK=0
@@ -3296,9 +3296,7 @@ xmenu_read_menu_prompt() {
     while :; do
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
-            printf '\n'
-            xmenu_show_pending_update_notice
-            printf '%b' "${_xrmp_prompt}"
+            if xmenu_redraw_pending_update; then printf '%b' "${_xrmp_prompt}"; fi
         fi
         read_uptime_tenths && _xrmp_before_ticks=$_uptime_tenths || _xrmp_before_ticks=''
         # BusyBox ash поддерживает -t; ниже предусмотрен обычный read для других sh.
@@ -3312,9 +3310,7 @@ xmenu_read_menu_prompt() {
         fi
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
-            printf '\n'
-            xmenu_show_pending_update_notice
-            printf '%b' "${_xrmp_prompt}"
+            if xmenu_redraw_pending_update; then printf '%b' "${_xrmp_prompt}"; fi
             # SIGUSR1 can make ash return status 1 from read; do not treat it as EOF.
             [ "${_xrmp_rc}" -eq 0 ] || continue
         fi
@@ -3344,15 +3340,25 @@ xmenu_read_menu_prompt() {
     done
 }
 
+xmenu_redraw_pending_update() {
+    # Результат фоновой проверки показываем на месте под U, а не под приглашением.
+    [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] && return 1
+    _xrpu_latest=$(xmenu_cached_remote_version 2>/dev/null || :)
+    xmenu_valid_version "$_xrpu_latest" || return 1
+    version_is_older "$APP_VERSION" "$_xrpu_latest" || return 1
+    render_menu
+    return 0
+}
+
 xmenu_show_pending_update_notice() {
     [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] && return 0
     _xsp_latest=$(xmenu_cached_remote_version 2>/dev/null || :)
     xmenu_valid_version "$_xsp_latest" || return 0
     version_is_older "$APP_VERSION" "$_xsp_latest" || return 0
     if [ "$(get_ui_lang)" = en ]; then
-        say "${GREEN}↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it.${RESET}"
+        say "${CYAN}  ↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it.${RESET}"
     else
-        say "${GREEN}↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки.${RESET}"
+        say "${CYAN}  ↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки.${RESET}"
     fi
     XMENU_UPDATE_NOTICE_VISIBLE=1
 }
@@ -3593,8 +3599,8 @@ xmenu_opkg_set_mirror_locked() {
         BEGIN {
             while ((getline cfgline < mirrors) > 0) {
                 n=split(cfgline, fields, "|")
-                if (n < 4 || fields[1] !~ /^[0-9]+$/ || fields[3] !~ /^https?:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._-]*)?$/) continue
                 sub(/\/+$/, "", fields[3])
+                if (n < 4 || fields[1] !~ /^[0-9]+$/ || fields[3] !~ /^https?:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(\/[A-Za-z0-9._-]+)*$/) continue
                 rest=fields[3]; sub(/^https?:\/\//, "", rest)
                 host=rest; sub(/\/.*$/, "", host)
                 prefix=substr(rest, length(host)+1)
@@ -3964,22 +3970,20 @@ xmenu_opkg_manual_mirror_menu() {
     _omm_lang=$(get_ui_lang)
     xmenu_opkg_mirrors_ensure_config || { say 'Не удалось загрузить каталог зеркал.'; return 1; }
     while :; do
-        xmenu_opkg_check_mirrors 0 || :
+        line
         if [ "$_omm_lang" = en ]; then
-            say 'Select a repository by number. You can still select a mirror marked unavailable.'
-            say 'R — refresh status; T — test the current repository.'
+            say "${WHITE}CHOOSE AN ENTWARE MIRROR${RESET}"
+            say 'Select a mirror by number. No network checks are run here.'
             _omm_prompt='[?] Repository: '
-            _omm_refresh='Refresh mirror availability'
-            _omm_test='Check the selected repository'
             _omm_back='Back'
         else
-            say 'Выбери зеркало по номеру. Недоступное зеркало тоже можно выбрать вручную.'
-            say 'R — обновить статусы; T — проверить текущее зеркало.'
+            say "${WHITE}ВЫБОР ЗЕРКАЛА ENTWARE${RESET}"
+            say 'Выбери зеркало по номеру. Сетевая проверка здесь не запускается.'
             _omm_prompt='[?] Репозиторий: '
-            _omm_refresh='Обновить доступность зеркал'
-            _omm_test='Проверить выбранное зеркало'
             _omm_back='Назад'
         fi
+        xmenu_opkg_show_active_repository "$_omm_lang"
+        line
         _omm_active=$(xmenu_opkg_active_mirror_url 2>/dev/null || :)
         while IFS='|' read -r _omm_id _omm_name _omm_url _omm_region || [ -n "$_omm_id" ]; do
             _omm_region=${_omm_region%"$(printf '\r')"}
@@ -3988,18 +3992,17 @@ xmenu_opkg_manual_mirror_menu() {
             if [ "${_omm_url%/}" = "$_omm_active" ]; then
                 printf '%s' "$ACTIVE"
                 menu_item "$_omm_id" "✓ $_omm_name — $_omm_region"
+                say "           ${_omm_url%/}"
                 printf '%s' "$RESET"
             else
                 menu_item "$_omm_id" "$_omm_name — $_omm_region"
+                say "           ${_omm_url%/}"
             fi
         done < "$XMENU_OPKG_MIRRORS_FILE"
-        menu_item R "$_omm_refresh"
-        menu_item T "$_omm_test"
         menu_item 0 "$_omm_back"
+        line
         _read_or_eof "$_omm_prompt" || return 0
         case "$_read_value" in
-            R|r) xmenu_opkg_check_mirrors 1; pause ;;
-            T|t) xmenu_opkg_check_selected_mirror; pause ;;
             0|'') return 0 ;;
             *[!0-9]*) say 'Неверный пункт.'; sleep 1 ;;
             *)
@@ -4023,10 +4026,9 @@ opkg_settings_menu() {
             say "${WHITE}OPKG / Entware repositories${RESET}"
             xmenu_opkg_show_active_repository en
             line
-            menu_item 1 'Auto-select available Entware repository'
-            say '    Checks package indexes and chooses the fastest.'
+            menu_item 1 'Auto-select available Entware repository - checks and selects an available mirror automatically'
             menu_item 2 'Check Entware mirror availability'
-            menu_item 3 'Choose Entware mirror manually - Status, region and URL of each mirror.'
+            menu_item 3 'Choose Entware mirror manually - Region, URL and current selection.'
             menu_item 4 'Restore latest opkg.conf backup'
             menu_item 5 'Run opkg update'
             menu_item 0 'Back'
@@ -4035,10 +4037,9 @@ opkg_settings_menu() {
             say "${WHITE}Репозитории OPKG / Entware${RESET}"
             xmenu_opkg_show_active_repository ru
             line
-            menu_item 1 'Авто-выбор доступного репозитория Entware'
-            say '    Проверит индекс пакетов и выберет быстрое зеркало.'
+            menu_item 1 'Авто-выбор доступного репозитория Entware - проверит и выберет автоматически доступное зеркало'
             menu_item 2 'Проверить доступность зеркал Entware'
-            menu_item 3 'Выбрать зеркало Entware вручную -   Статус, регион и адрес каждого зеркала.'
+            menu_item 3 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.'
             menu_item 4 'Восстановить копию opkg.conf'
             menu_item 5 'Выполнить opkg update'
             menu_item 0 'Назад'
@@ -4174,29 +4175,17 @@ render_menu() {
     fi
     _r=$_XMENU_DEVICE_INFO_CACHE
     _model=${_r%%|*}; _fw=${_r#*|}; _arch=$_XMENU_ARCH_CACHE
-    # Одна строка заголовка без дополнительных рамок. Длину считаем в
-    # видимых UTF-8 символах, а не в байтах (◆ занимает один столбец).
+    # Заголовок центрируется в той же рамке, что и разделители меню.
+    # Длину UTF-8 считаем в видимых символах (◆ занимает один столбец).
     _title="Xmenu ◆ v$APP_VERSION"
     _title_cells=$(printf '%s\n' "$_title" | LC_ALL=C awk '{s=$0; gsub(/[\200-\277]/, "", s); print length(s)}')
     case "$_title_cells" in ''|*[!0-9]*) _title_cells=12 ;; esac
-    _title_line_cells=$((_title_cells + 4))
-    # FIX: заголовок намеренно прижат к левому краю терминала.
-    # Не вычислять отступ от COLUMNS/stty: на роутерах эти значения могут
-    # различаться и снова визуально уводить заголовок далеко вправо.
-    _title_pad_text=''
+    _title_pad=$(((_XMENU_RENDER_WIDTH - _title_cells) / 2))
+    [ "$_title_pad" -ge 0 ] || _title_pad=0
     XMENU_UPDATE_NOTICE_VISIBLE=0
-    printf '%s%s %s%s%s %s\n' \
-        "$_title_pad_text" "${PURPLE}|${RESET}" "$WHITE" "$_title" "$RESET" "${PURPLE}|${RESET}"
-    _latest_xmenu=$(xmenu_cached_remote_version 2>/dev/null || :)
-    if [ -n "$_latest_xmenu" ] && version_is_older "$APP_VERSION" "$_latest_xmenu"; then
-        if [ "$_lang" = en ]; then
-            say "${GREEN}↑ Update available: Xmenu v$_latest_xmenu${RESET}"
-        else
-            say "${GREEN}↑ Доступно обновление Xmenu v$_latest_xmenu${RESET}"
-        fi
-        XMENU_UPDATE_NOTICE_VISIBLE=1
-    fi
-    say ''
+    line
+    printf '%*s%s%s%s\n' "$_title_pad" '' "$WHITE" "$_title" "$RESET"
+    line
 
     # Architecture uses nfqws-menu order: opkg print-architecture -> opkg.conf -> uname -m.
     _cpu=$_arch
@@ -4208,16 +4197,10 @@ render_menu() {
     fi
 
     if [ "$_lang" = en ]; then
-        printf '  Router:       %s%s%s\n' "$CYAN" "$_model" "$RESET"
-        printf '  KeeneticOS:   %s%s%s\n' "$CYAN" "${_fw:-not detected}" "$RESET"
-        printf '  Processor:    %s%s%s\n' "$GREEN" "$_cpu" "$RESET"
+        printf '%sModel: %s %s %s%s\n' "$CYAN" "$_model" "${_fw:-not detected}" "$_cpu" "$RESET"
     else
-        # Пробелы заданы явно: позиция значений одинаковая и в BusyBox без locale.
-        printf '  Роутер:      %s%s%s\n' "$CYAN" "$_model" "$RESET"
-        printf '  KeeneticOS:  %s%s%s\n' "$CYAN" "${_fw:-не определена}" "$RESET"
-        printf '  Процессор:   %s%s%s\n' "$GREEN" "$_cpu" "$RESET"
+        printf '%sМодель: %s %s %s%s\n' "$CYAN" "$_model" "${_fw:-не определена}" "$_cpu" "$RESET"
     fi
-    say ''
     render_component_statuses
     line
 
@@ -4226,7 +4209,7 @@ render_menu() {
     else
         menu_item U 'Проверить наличие обновления Xmenu'
     fi
-    say ''
+    xmenu_show_pending_update_notice
 
     if [ "$_lang" = en ]; then
         say "${PURPLE}[::]  Install / update:${RESET}"
@@ -4236,28 +4219,23 @@ render_menu() {
         menu_item 4  'nfqws2'
         menu_item 5  'nfqws-web-keenetic'
         menu_item 6  'nfqws2-ui'
-        say ''
         say "${PURPLE}[::]  Manual installation profiles:${RESET}"
         menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen at startup)'
         menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen at startup)'
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
-        say ''
         say "${PURPLE}[::]  Strategies / blobs / lists:${RESET}"
         menu_item 11 'Select and apply nfqws strategy'
         menu_item 12 'Download/check blobs and lists for active strategy from the list'
         menu_item 13 'Install all nfqws2 blobs'
         menu_item 14 'Download rkn.list (nfqws2 / nfqws) — 125k+ domains'
-        say ''
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
         menu_item 15 'DPI Detector (DNS/16 KB)'
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (install / launch)'
         menu_item 18 'awg-manager'
-        say ''
         say "${PURPLE}[::]  Interface / language:${RESET}"
         menu_item 19 'Change language: RU / EN'
-        say ''
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
         menu_item 20 'Remove components'
         menu_item 21 'Remove Xmenu'
@@ -4274,28 +4252,23 @@ render_menu() {
         menu_item 4  'nfqws2'
         menu_item 5  'nfqws-web-keenetic'
         menu_item 6  'nfqws2-ui'
-        say ''
         say "${PURPLE}[::]  Ручные настройки установки:${RESET}"
         menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen в автозагрузке)'
         menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen в автозагрузке)'
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
-        say ''
         say "${PURPLE}[::]  Стратегии / blobs / lists:${RESET}"
         menu_item 11 'Выбрать и применить стратегию nfqws'
         menu_item 12 'Скачать/проверить blobs и lists активной стратегии из списка'
         menu_item 13 'Установить все blobs nfqws2'
         menu_item 14 'Скачать rkn.list (nfqws2 / nfqws) — 125k+ доменов'
-        say ''
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
         menu_item 15 'DPI Detector (DNS/16kb)'
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (установка / запуск)'
         menu_item 18 'awg-manager'
-        say ''
         say "${PURPLE}[::]  Интерфейс и язык:${RESET}"
         menu_item 19 'Сменить язык: RU / EN'
-        say ''
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
         menu_item 20 'Удаление компонентов'
         menu_item 21 'Удалить Xmenu'

@@ -105,7 +105,7 @@ test "$(xmenu_opkg_feed_path)" = '/aarch64-k3.10' || fail 'trailing slash feed p
 terminal_width() { printf 100; }
 _read_or_eof() { _read_value=0; return 0; }
 opkg_settings_menu > "$test_dir/menu.txt"
-grep -q 'Выбрать зеркало Entware вручную -   Статус, регион и адрес каждого зеркала.' "$test_dir/menu.txt" || fail 'manual menu label split'
+grep -q 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.' "$test_dir/menu.txt" || fail 'manual menu label split'
 grep -q 'Текущий:.*Working' "$test_dir/menu.txt" || fail 'active repository missing'
 if grep -q 'Создать копию текущего\|6\.' "$test_dir/menu.txt"; then fail 'removed menu item still present'; fi
 test_option=4
@@ -120,6 +120,48 @@ opkg() { printf '%s\n' "$1" > "$test_dir/dispatched"; }
 opkg_settings_menu >/dev/null
 test "$(cat "$test_dir/dispatched")" = update || fail 'opkg update number wrong'
 version_is_older 1.3.2 1.3.3 || fail 'version ordering'
+
+# Ручной выбор открывается и меняет зеркало без сетевых проверок.
+xmenu_opkg_check_mirrors() { fail 'manual selection started availability checks'; }
+xmenu_opkg_probe_mirror() { fail 'manual selection probed a mirror'; }
+test_option=1
+_read_or_eof() { _read_value=$test_option; test_option=0; return 0; }
+xmenu_opkg_manual_mirror_menu > "$test_dir/manual-menu.txt" || fail 'manual mirror menu failed'
+grep -q '✓ Working' "$test_dir/manual-menu.txt" || fail 'current manual choice not marked'
+grep -q '^src/gz entware http://blocked.test/aarch64-k3.10$' "$test_dir/opkg.conf" || fail 'manual selection not applied'
+
+# Компактный экран с восемью компонентами помещается в высоту скриншота.
+_XMENU_DEVICE_CACHE_READY=1
+_XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
+_XMENU_ARCH_CACHE=aarch64
+CYAN=$(printf '\033[36m')
+RESET=$(printf '\033[0m')
+xmenu_cached_remote_version() { printf '1.3.4'; }
+render_component_statuses() {
+    say 'Установленные компоненты:'
+    component_table_header
+    layout_component=1
+    while [ "$layout_component" -le 8 ]; do
+        say "  component-$layout_component 1.0"
+        layout_component=$((layout_component + 1))
+    done
+    say '  Обновляю сведения о компонентах в фоне...'
+}
+render_menu > "$test_dir/main-menu.txt"
+test "$(wc -l < "$test_dir/main-menu.txt")" -le 54 || fail 'menu still exceeds screenshot height'
+grep -q '24\. .*Создать резервную' "$test_dir/main-menu.txt" || fail 'last action missing'
+grep -q '0\. .*Выход' "$test_dir/main-menu.txt" || fail 'exit missing'
+grep -Fq "${CYAN}Модель: Hopper (NC-3811) 5.1.7 aarch64" "$test_dir/main-menu.txt" || fail 'compact cyan device line missing'
+grep -Fq "${CYAN}  ↑" "$test_dir/main-menu.txt" || fail 'update notice is not cyan'
+escape=$(printf '\033')
+sed "s/$escape\[[0-9;]*m//g" "$test_dir/main-menu.txt" > "$test_dir/plain-menu.txt"
+update_line=$(grep -n '↑ Доступно обновление' "$test_dir/plain-menu.txt" | cut -d: -f1)
+check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-menu.txt" | cut -d: -f1)
+test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
+LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
+    text=$0; sub(/^ */, "", text); gsub(/[\200-\277]/, "", text)
+    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)) exit 1; found=1
+} END {if (!found) exit 1}' "$test_dir/plain-menu.txt" || fail 'title not centered in frame'
 
 # Открытие двух меню не должно удерживать общий lock сессии.
 configure_locale() { return 0; }
