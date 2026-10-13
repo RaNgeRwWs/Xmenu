@@ -104,9 +104,9 @@ trap 'cleanup final' 0
 
 if [ -t 1 ]; then
     RESET=$(printf '\033[0m'); PURPLE=$(printf '\033[35m'); LAVENDER=$(printf '\033[95m'); WHITE=$(printf '\033[97m')
-    MUTED=$(printf '\033[90m'); GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m'); RED=$(printf '\033[31m'); CYAN=$(printf '\033[36m'); ACTIVE=$(printf '\033[1;92m')
+    MUTED=$(printf '\033[90m'); GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m'); RED=$(printf '\033[31m'); CYAN=$(printf '\033[36m'); BRIGHT_CYAN=$(printf '\033[1;38;5;51m'); ACTIVE=$(printf '\033[1;92m')
 else
-    RESET=''; PURPLE=''; LAVENDER=''; WHITE=''; MUTED=''; GREEN=''; YELLOW=''; RED=''; CYAN=''; ACTIVE=''
+    RESET=''; PURPLE=''; LAVENDER=''; WHITE=''; MUTED=''; GREEN=''; YELLOW=''; RED=''; CYAN=''; BRIGHT_CYAN=''; ACTIVE=''
 fi
 say() { printf '%s\n' "$*"; }
 
@@ -2004,7 +2004,8 @@ XMENU_STRATEGY_ORDER
     # Отмечаем выбранную стратегию по маркеру, затем по совпадению конфига.
     _current_strategy=$(sed -n '1{s/\r$//;p;}' "$ROOT_DIR/active-strategy-nfqws$_ver" 2>/dev/null)
     case "$_current_strategy" in ''|*/*|*..*|*[!A-Za-z0-9_.+-]*) _current_strategy='' ;; esac
-    if [ -z "$_current_strategy" ] || [ ! -f "$_dir/$_current_strategy" ]; then
+    if [ -z "$_current_strategy" ] || [ ! -f "$_dir/$_current_strategy" ] ||
+       ! strategy_configs_equal "$_conf" "$_dir/$_current_strategy"; then
         _current_strategy=''
         for _candidate_file in "$_dir"/*.conf; do
             [ -s "$_candidate_file" ] || continue
@@ -2022,8 +2023,11 @@ XMENU_STRATEGY_ORDER
             printf '%s\t%s\n' "$_display_name" '' >> "$_display"
         fi
     done < "$_list"
-    line; say "${WHITE}ВЫБОР СТРАТЕГИИ — NFQWS$_ver${RESET}"; line
-    awk -F '\t' '{printf "      %2d. %-28s %s\n", NR, $1, $2}' "$_display"
+    line; say "${BRIGHT_CYAN}ВЫБОР СТРАТЕГИИ — nfqws$_ver:${RESET}"; line
+    awk -F '\t' -v active="$_current_strategy" -v cyan="$BRIGHT_CYAN" -v reset="$RESET" '{
+        if ($1 == active) printf "      %2d. %-28s %s— Активная стратегия ⚡%s\n", NR, $1, cyan, reset
+        else printf "      %2d. %-28s %s\n", NR, $1, $2
+    }' "$_display"
     menu_item 0 'Назад'
     line; _read_or_eof 'Номер стратегии: ' || { rm -f "$_display"; return 0; }; _n=$_read_value
     rm -f "$_display"
@@ -3212,10 +3216,10 @@ check_xmenu_update_now() {
     if version_is_older "$APP_VERSION" "$_cxu_version"; then
         if [ "$_cxu_lang" = en ]; then
             say "${CYAN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
-            say 'Choose option 22 — Update Xmenu from GitHub to install it.'
+            say 'Choose option 22 — Update Xmenu to install it.'
         else
             say "${CYAN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
-            say 'Для установки выбери пункт 22 — «Обновить Xmenu с GitHub».'
+            say 'Для установки выбери пункт 22 — «Обновить Xmenu».'
         fi
         XMENU_MANUAL_UPDATE_CHECK=0
         return 0
@@ -4016,7 +4020,7 @@ opkg_settings_menu() {
     while :; do
         line
         if [ "$_osm_lang" = en ]; then
-            say "${WHITE}OPKG / Entware repositories${RESET}"
+            say "${BRIGHT_CYAN}OPKG / Entware repositories:${RESET}"
             xmenu_opkg_show_active_repository en
             line
             menu_item 1 'Auto-select available Entware repository - checks and selects an available mirror automatically'
@@ -4027,7 +4031,7 @@ opkg_settings_menu() {
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
         else
-            say "${WHITE}Репозитории OPKG / Entware${RESET}"
+            say "${BRIGHT_CYAN}Репозитории OPKG / Entware:${RESET}"
             xmenu_opkg_show_active_repository ru
             line
             menu_item 1 'Авто-выбор доступного репозитория Entware - проверит и выберет автоматически доступное зеркало'
@@ -4228,18 +4232,15 @@ render_menu() {
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
         menu_item 15 'DPI Detector (DNS/16 KB)'
         menu_item 16 'TG WS Proxy Rust'
-        menu_item 17 'KeenKit (install / launch)'
+        menu_item 17 'KeenKit'
         menu_item 18 'awg-manager'
         say ""
-        say "${PURPLE}[::]  Interface / language:${RESET}"
-        menu_item 19 'Change language: RU / EN'
-        say ""
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
+        menu_item 19 'Сменить язык: RU / EN (change language)'
         menu_item 20 'Remove components'
         menu_item 21 'Remove Xmenu'
-        menu_item 22 'Update Xmenu from GitHub'
+        menu_item 22 'Update Xmenu'
         menu_item 23 'OPKG settings / Entware mirrors'
-        menu_item 24 'Back up NFQWS/XKeen configs'
         menu_item 0  'Exit'
         _prompt='[?] Select an option [Enter = exit]: '
     else
@@ -4266,18 +4267,15 @@ render_menu() {
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
         menu_item 15 'DPI Detector (DNS/16kb)'
         menu_item 16 'TG WS Proxy Rust'
-        menu_item 17 'KeenKit (установка / запуск)'
+        menu_item 17 'KeenKit'
         menu_item 18 'awg-manager'
         say ""
-        say "${PURPLE}[::]  Интерфейс и язык:${RESET}"
-        menu_item 19 'Сменить язык: RU / EN'
-        say ""
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
+        menu_item 19 'Сменить язык: RU / EN (change language)'
         menu_item 20 'Удаление компонентов'
         menu_item 21 'Удалить Xmenu'
-        menu_item 22 'Обновить Xmenu с GitHub'
+        menu_item 22 'Обновить Xmenu'
         menu_item 23 'Настройки OPKG / зеркала Entware'
-        menu_item 24 'Создать резервную копию конфигураций NFQWS/XKeen'
         menu_item 0  'Выход'
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
@@ -4405,12 +4403,22 @@ _remove_menu_add() {
 
 remove_component_backups() {
     command -v find >/dev/null 2>&1 || { say "${RED}Команда find не найдена.${RESET}"; return 1; }
-    confirm_no 'Удалить резервные файлы *.bak, *.bak.* и *-opkg в каталогах конфигурации?' || { say 'Очистка отменена.'; return 1; }
+    if [ "$(get_ui_lang)" = en ]; then
+        say 'Backup cleanup scans /opt/etc/nfqws, /opt/etc/nfqws2, /opt/etc/xkeen, /opt/etc/lighttpd and /opt/etc/xmenu/backups.'
+        say 'Matching files: *.bak, *.bak.* and *-opkg. The active configuration files are not selected.'
+    else
+        say 'Проверяются каталоги: /opt/etc/nfqws, /opt/etc/nfqws2, /opt/etc/xkeen, /opt/etc/lighttpd и /opt/etc/xmenu/backups.'
+        say 'Маски файлов: *.bak, *.bak.* и *-opkg. Основные файлы конфигурации не затрагиваются.'
+    fi
     _rb_list="$ROOT_DIR/remove-backups-list.$$"
     : > "$_rb_list" || return 1
     for _rb_dir in /opt/etc/nfqws /opt/etc/nfqws2 /opt/etc/xkeen /opt/etc/lighttpd /opt/etc/xmenu/backups; do
         [ -d "$_rb_dir" ] || continue
-        find "$_rb_dir" -type f \( -name '*.bak' -o -name '*.bak.*' -o -name '*-opkg' \) -print 2>/dev/null >> "$_rb_list"
+        if ! find "$_rb_dir" -type f \( -name '*.bak' -o -name '*.bak.*' -o -name '*-opkg' \) -print 2>/dev/null >> "$_rb_list"; then
+            rm -f "$_rb_list"
+            say "${RED}Не удалось проверить $_rb_dir; файлы не удалены.${RESET}"
+            return 1
+        fi
     done
     if [ ! -s "$_rb_list" ]; then
         rm -f "$_rb_list"
@@ -4423,7 +4431,12 @@ remove_component_backups() {
         [ "${INTERRUPTED:-0}" = 0 ] || { rm -f "$_rb_list"; say 'Очистка прервана; оставшиеся файлы сохранены.'; return 130; }
         [ -n "$_rb_file" ] && printf '  %s\n' "$_rb_file"
     done < "$_rb_list"
-    confirm_no 'Подтвердить удаление перечисленных резервных файлов?' || { rm -f "$_rb_list"; say 'Очистка отменена.'; return 1; }
+    if [ "$(get_ui_lang)" = en ]; then
+        _rb_prompt='Delete all backups of what? : *.bak, *.bak.* and *-opkg files in the listed config folders. Continue?'
+    else
+        _rb_prompt='Удалить все резервные копии чего? : файлы *.bak, *.bak.* и *-opkg в перечисленных каталогах конфигураций. Продолжить?'
+    fi
+    confirm_no "$_rb_prompt" || { rm -f "$_rb_list"; say 'Очистка отменена.'; return 1; }
     _rb_removed=0
     _rb_failed=0
     while IFS= read -r _rb_file || [ -n "$_rb_file" ]; do
@@ -4554,156 +4567,134 @@ remove_xmenu_backups() {
     return "$_rxb_failed"
 }
 
-# Подменю показывает только реально обнаруженные компоненты Xmenu.
-remove_components_menu() {
+# Дополнительные пункты сохранены в отдельном списке, чтобы нумерация основных действий не менялась.
+remove_optional_components_menu() {
     while :; do
         _REMOVE_MENU_FILE="$ROOT_DIR/.remove-components.$$"
         : > "$_REMOVE_MENU_FILE" || return 1
         _rm_lang=$(get_ui_lang)
         line
-        if [ "$_rm_lang" = en ]; then
-            say "${WHITE}REMOVE COMPONENTS${RESET}"
-            say 'Only detected components are shown. Shared dependencies are not removed automatically.'
-        else
-            say "${WHITE}УДАЛЕНИЕ КОМПОНЕНТОВ${RESET}"
-            say 'Показываются только установленные компоненты. Общие зависимости автоматически не удаляются.'
-        fi
+        if [ "$_rm_lang" = en ]; then say "${BRIGHT_CYAN}OTHER INSTALLED COMPONENTS${RESET}"
+        else say "${BRIGHT_CYAN}ДРУГИЕ УСТАНОВЛЕННЫЕ КОМПОНЕНТЫ${RESET}"; fi
+        if [ "$_rm_lang" = en ]; then say 'Only detected components are shown; shared dependencies are preserved.'
+        else say 'Показываются только найденные компоненты; общие зависимости сохраняются.'; fi
         line
-
-        if [ "$_rm_lang" = en ]; then
-            xkeen_is_installed && _remove_menu_add xkeen 'XKeen — uninstall'
-            xkeen_ui_zxc_is_installed && _remove_menu_add ui-zxc 'XKeen UI — zxc-rv'
-            xkeen_ui_umar_is_installed && _remove_menu_add ui-umar 'XKeen UI — umarcheh001'
-            [ -x /opt/bin/dpi-detector ] && _remove_menu_add dpi 'DPI Detector'
-            is_installed awg-manager && _remove_menu_add awg 'awg-manager'
-            { [ -x /opt/bin/tgwsproxy ] || [ -x /opt/etc/init.d/S99tgwsproxy ] || [ -x /opt/bin/tg-ws-proxy-rs ] || [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ]; } && _remove_menu_add tgws 'TG WS Proxy Rust'
-            { [ -x /opt/keenkit.sh ] || [ -L /opt/bin/keenkit ]; } && _remove_menu_add keenkit 'KeenKit'
-            is_installed nfqws2-keenetic && _remove_menu_add nfqws2 'nfqws2-keenetic'
-            is_installed nfqws-keenetic-web && _remove_menu_add nfweb 'nfqws-keenetic-web'
-            is_installed nfqws-keenetic && _remove_menu_add nfqws1 'nfqws-keenetic'
-            if is_installed nfqws2-ui || is_installed nfqws-ui || [ -x /opt/sbin/nfqws-ui-setup ] || [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
-                _remove_menu_add nfui 'NFQWS UI'
-            fi
-            [ "$(get_xray_version)" != 'не найден' ] && _remove_menu_add xray 'Xray'
-            [ "$(get_mihomo_version)" != 'не найден' ] && _remove_menu_add mihomo 'Mihomo'
-        else
-            xkeen_is_installed && _remove_menu_add xkeen 'XKeen — полная деинсталляция'
-            xkeen_ui_zxc_is_installed && _remove_menu_add ui-zxc 'XKeen UI — zxc-rv'
-            xkeen_ui_umar_is_installed && _remove_menu_add ui-umar 'XKeen UI — umarcheh001'
-            [ -x /opt/bin/dpi-detector ] && _remove_menu_add dpi 'DPI Detector'
-            is_installed awg-manager && _remove_menu_add awg 'awg-manager'
-            { [ -x /opt/bin/tgwsproxy ] || [ -x /opt/etc/init.d/S99tgwsproxy ] || [ -x /opt/bin/tg-ws-proxy-rs ] || [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ]; } && _remove_menu_add tgws 'TG WS Proxy Rust'
-            { [ -x /opt/keenkit.sh ] || [ -L /opt/bin/keenkit ]; } && _remove_menu_add keenkit 'KeenKit'
-            is_installed nfqws2-keenetic && _remove_menu_add nfqws2 'nfqws2-keenetic'
-            is_installed nfqws-keenetic-web && _remove_menu_add nfweb 'nfqws-keenetic-web'
-            is_installed nfqws-keenetic && _remove_menu_add nfqws1 'nfqws-keenetic'
-            if is_installed nfqws2-ui || is_installed nfqws-ui || [ -x /opt/sbin/nfqws-ui-setup ] || [ -x /opt/usr/sbin/nfqws-ui-setup ]; then
-                _remove_menu_add nfui 'NFQWS UI'
-            fi
-            [ "$(get_xray_version)" != 'не найден' ] && _remove_menu_add xray 'Xray'
-            [ "$(get_mihomo_version)" != 'не найден' ] && _remove_menu_add mihomo 'Mihomo'
+        xkeen_ui_umar_is_installed && _remove_menu_add ui-umar 'XKeen UI — umarcheh001'
+        is_installed awg-manager && _remove_menu_add awg 'awg-manager'
+        { [ -x /opt/bin/tgwsproxy ] || [ -x /opt/etc/init.d/S99tgwsproxy ] || [ -x /opt/bin/tg-ws-proxy-rs ] || [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ]; } && _remove_menu_add tgws 'TG WS Proxy Rust'
+        { [ -x /opt/keenkit.sh ] || [ -L /opt/bin/keenkit ]; } && _remove_menu_add keenkit 'KeenKit'
+        is_installed nfqws-keenetic && _remove_menu_add nfqws1 'nfqws-keenetic'
+        if is_installed nfqws2-ui || is_installed nfqws-ui || [ -x /opt/sbin/nfqws-ui-setup ] || [ -x /opt/usr/sbin/nfqws-ui-setup ]; then _remove_menu_add nfui 'NFQWS UI'; fi
+        [ "$(get_xray_version)" != 'не найден' ] && _remove_menu_add xray 'Xray'
+        if [ ! -s "$_REMOVE_MENU_FILE" ]; then
+            if [ "$_rm_lang" = en ]; then say "  ${YELLOW}No additional components detected.${RESET}"
+            else say "  ${YELLOW}Другие компоненты не обнаружены.${RESET}"; fi
+            rm -f "$_REMOVE_MENU_FILE"
+            return 0
         fi
-
         _rm_idx=0
-        if [ -s "$_REMOVE_MENU_FILE" ]; then
-            while IFS="$(printf '\t')" read -r _rm_code _rm_label || [ -n "$_rm_code" ]; do
-                _rm_idx=$((_rm_idx + 1))
-                menu_item "$_rm_idx" "$_rm_label"
-            done < "$_REMOVE_MENU_FILE"
-        else
-            if [ "$_rm_lang" = en ]; then
-                say "  ${YELLOW}No installed components detected.${RESET}"
-            else
-                say "  ${YELLOW}Нет обнаруженных компонентов для удаления.${RESET}"
-            fi
-        fi
+        while IFS="$(printf '\t')" read -r _rm_code _rm_label || [ -n "$_rm_code" ]; do
+            _rm_idx=$((_rm_idx + 1))
+            menu_item "$_rm_idx" "$_rm_label"
+        done < "$_REMOVE_MENU_FILE"
+        menu_item 0 'Назад'
+        line
+        if [ "$_rm_lang" = en ]; then _rm_prompt='Choose a component [0 = back]: '
+        else _rm_prompt='Выбери компонент [0 = назад]: '; fi
+        _read_or_eof "$_rm_prompt" || { rm -f "$_REMOVE_MENU_FILE"; return 0; }
+        _rm_choice=$_read_value
+        case "$_rm_choice" in ''|0) rm -f "$_REMOVE_MENU_FILE"; return 0 ;; *[!0-9]*)
+            if [ "$_rm_lang" = en ]; then say 'Enter a number only.'; else say 'Введи номер цифрами.'; fi
+            rm -f "$_REMOVE_MENU_FILE"
+            continue
+            ;;
+        esac
+        while [ "${_rm_choice#0}" != "$_rm_choice" ]; do _rm_choice=${_rm_choice#0}; done
+        [ -n "$_rm_choice" ] || _rm_choice=0
+        _rm_code=$(sed -n "${_rm_choice}p" "$_REMOVE_MENU_FILE" 2>/dev/null | cut -f1)
+        case "$_rm_code" in
+            ui-umar) remove_xkeen_ui_umarcheh001 ;;
+            awg) if confirm 'Удалить пакет awg-manager (настройки в /opt/etc/awg-manager сохранятся)?'; then opkg remove awg-manager || say "${RED}Не удалось удалить awg-manager.${RESET}"; fi ;;
+            tgws)
+                if confirm 'Удалить TG WS Proxy Rust, сохранив настройки?'; then
+                    if [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ] || [ -x /opt/bin/tg-ws-proxy-rs ]; then run_nfmenu_action remove_tg_ws_proxy_rs
+                    else say "${YELLOW}Автоудаление старой реализации TG WS Proxy отключено; проверь пакет и инструкцию его версии.${RESET}"; fi
+                fi ;;
+            keenkit) if confirm 'Удалить KeenKit (/opt/keenkit.sh)?'; then rm -f /opt/keenkit.sh; [ ! -L /opt/bin/keenkit ] || rm -f /opt/bin/keenkit; say 'KeenKit удалён.'; fi ;;
+            nfqws1) remove_nf2_component nfqws-keenetic ;;
+            nfui) remove_nfui_component ;;
+            xray) remove_xkeen_core xray ;;
+            *) say 'Неверный пункт.' ;;
+        esac
+        rm -f "$_REMOVE_MENU_FILE"
+        pause
+    done
+}
 
-        # Все действия имеют числовые номера, выдаваемые после списка компонентов.
-        _rm_all_idx=$((_rm_idx + 1))
-        _rm_backup_idx=$((_rm_idx + 2))
-        _rm_blobs_idx=$((_rm_idx + 3))
-        _rm_xmenu_backup_idx=$((_rm_idx + 4))
+remove_components_menu() {
+    while :; do
+        _rm_lang=$(get_ui_lang)
+        line
         if [ "$_rm_lang" = en ]; then
-            menu_item "$_rm_all_idx" 'Remove all NFQWS packages'
-            menu_item "$_rm_backup_idx" 'Remove backup files (*.bak, *.bak.* / *-opkg)'
-            menu_item "$_rm_blobs_idx" 'Remove all NFQWS2 blobs (*.bin)'
-            menu_item "$_rm_xmenu_backup_idx" 'Remove all Xmenu backups (including config backups)'
+            say "${BRIGHT_CYAN}REMOVE UTILITIES AND COMPONENTS${RESET}"
+            say 'Only selected packages or files are removed; configuration is preserved where possible.'
+            line
+            menu_item 1 'XKeen — full uninstall'
+            menu_item 2 'XKeen UI — zxc-rv'
+            menu_item 3 'DPI Detector'
+            menu_item 4 'nfqws2-keenetic'
+            menu_item 5 'nfqws-keenetic-web'
+            menu_item 6 'Mihomo'
+            menu_item 7 'Remove all NFQWS packages'
+            menu_item 8 'Remove backup files (*.bak, *.bak.* / *-opkg)'
+            menu_item 9 'Remove all NFQWS2 blobs (*.bin)'
+            menu_item 10 'Remove all Xmenu backups (including config backups)'
+            menu_item 11 'Other installed components'
             menu_item 0 'Back'
-            _rm_prompt='Choose a number [0 = back]: '
+            _rm_prompt='Choose an action [0 = back]: '
         else
-            menu_item "$_rm_all_idx" 'Удалить все пакеты NFQWS'
-            menu_item "$_rm_backup_idx" 'Удалить резервные копии (*.bak, *.bak.* / *-opkg)'
-            menu_item "$_rm_blobs_idx" 'Удалить все blobs NFQWS2 (*.bin)'
-            menu_item "$_rm_xmenu_backup_idx" 'Удалить все бэкапы Xmenu (включая бэкапы конфигураций)'
+            say "${BRIGHT_CYAN}УДАЛЕНИЕ УТИЛИТ И КОМПОНЕНТОВ${RESET}"
+            say 'Выбранный пакет или файл будет удалён; конфигурации сохраняются, если это возможно.'
+            line
+            menu_item 1 'XKeen — полная деинсталляция'
+            menu_item 2 'XKeen UI — zxc-rv'
+            menu_item 3 'DPI Detector'
+            menu_item 4 'nfqws2-keenetic'
+            menu_item 5 'nfqws-keenetic-web'
+            menu_item 6 'Mihomo'
+            menu_item 7 'Удалить все пакеты NFQWS'
+            menu_item 8 'Удалить резервные копии (*.bak, *.bak.* / *-opkg)'
+            menu_item 9 'Удалить все blobs NFQWS2 (*.bin)'
+            menu_item 10 'Удалить все бэкапы Xmenu (включая копии конфигураций)'
+            menu_item 11 'Другие установленные компоненты'
             menu_item 0 'Назад'
             _rm_prompt='Что удалить? Ваш выбор [0 = назад]: '
         fi
         line
-        _read_or_eof "$_rm_prompt" || { rm -f "$_REMOVE_MENU_FILE"; return 0; }
+        _read_or_eof "$_rm_prompt" || return 0
         _rm_choice=$_read_value
-        case "$_rm_choice" in
-            ''|0) rm -f "$_REMOVE_MENU_FILE"; return 0 ;;
-            *[!0-9]*)
-                if [ "$_rm_lang" = en ]; then say "${RED}Enter a number only.${RESET}"; else say "${RED}Введи номер цифрами.${RESET}"; fi
-                rm -f "$_REMOVE_MENU_FILE"
-                continue
-                ;;
+        case "$_rm_choice" in ''|0) return 0 ;; *[!0-9]*)
+            if [ "$_rm_lang" = en ]; then say 'Enter a number only.'; else say 'Введи номер цифрами.'; fi
+            continue
+            ;;
         esac
-        # Нормализуем ведущие нули, чтобы ввод 08/09 не зависел от арифметики shell.
         while [ "${_rm_choice#0}" != "$_rm_choice" ]; do _rm_choice=${_rm_choice#0}; done
         [ -n "$_rm_choice" ] || _rm_choice=0
         case "$_rm_choice" in
-            0) rm -f "$_REMOVE_MENU_FILE"; return 0 ;;
-            "$_rm_all_idx") remove_all_nf_components ;;
-            "$_rm_backup_idx") remove_component_backups ;;
-            "$_rm_blobs_idx") remove_nfqw2_blobs ;;
-            "$_rm_xmenu_backup_idx") remove_xmenu_backups ;;
-            *)
-                _rm_code=$(sed -n "${_rm_choice}p" "$_REMOVE_MENU_FILE" 2>/dev/null | cut -f1)
-                case "$_rm_code" in
-                    xkeen) remove_xkeen_component ;;
-                    ui-zxc) remove_xkeen_ui_zxc ;;
-                    ui-umar) remove_xkeen_ui_umarcheh001 ;;
-                    dpi) remove_dpi_detector_component ;;
-                    awg)
-                        if confirm 'Удалить пакет awg-manager (настройки в /opt/etc/awg-manager сохранятся)?'; then
-                            opkg remove awg-manager || say "${RED}Не удалось удалить awg-manager.${RESET}"
-                        fi
-                        ;;
-                    tgws)
-                        if confirm 'Удалить TG WS Proxy Rust, сохранив настройки?'; then
-                            if [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ] || [ -x /opt/bin/tg-ws-proxy-rs ]; then
-                                run_nfmenu_action remove_tg_ws_proxy_rs
-                            else
-                                say "${YELLOW}Обнаружен старый путь TG WS Proxy. Автоудаление старой реализации отключено: её установщик не относится к текущему официальному nfqws-menu.${RESET}"
-                                say 'Проверь пакет в opkg list-installed и используй инструкцию именно той версии, которая была установлена.'
-                            fi
-                        fi
-                        ;;
-                    keenkit)
-                        if confirm 'Удалить KeenKit (/opt/keenkit.sh)?'; then
-                            rm -f /opt/keenkit.sh
-                            [ ! -L /opt/bin/keenkit ] || rm -f /opt/bin/keenkit
-                            say 'KeenKit удалён.'
-                        fi
-                        ;;
-                    nfqws2) remove_nf2_component nfqws2-keenetic ;;
-                    nfweb) remove_nf2_component nfqws-keenetic-web ;;
-                    nfqws1) remove_nf2_component nfqws-keenetic ;;
-                    nfui) remove_nfui_component ;;
-                    xray) remove_xkeen_core xray ;;
-                    mihomo) remove_xkeen_core mihomo ;;
-                    *)
-                        if [ "$_rm_lang" = en ]; then say "${RED}No component at that number.${RESET}"; else say "${RED}Нет компонента с таким номером.${RESET}"; fi
-                        ;;
-                esac
-                ;;
+            1) if xkeen_is_installed; then remove_xkeen_component; else say 'XKeen не найден.'; fi ;;
+            2) if xkeen_ui_zxc_is_installed; then remove_xkeen_ui_zxc; else say 'XKeen UI zxc-rv не найден.'; fi ;;
+            3) remove_dpi_detector_component ;;
+            4) remove_nf2_component nfqws2-keenetic ;;
+            5) remove_nf2_component nfqws-keenetic-web ;;
+            6) remove_xkeen_core mihomo ;;
+            7) remove_all_nf_components ;;
+            8) remove_component_backups ;;
+            9) remove_nfqw2_blobs ;;
+            10) remove_xmenu_backups ;;
+            11) remove_optional_components_menu ;;
+            *) say 'Неверный пункт.'; continue ;;
         esac
-        rm -f "$_REMOVE_MENU_FILE"
-        say ''
-        if [ "$_rm_lang" = en ]; then _read_or_eof 'Press Enter to refresh component list...' || return 0
-        else _read_or_eof 'Enter — обновить список компонентов...' || return 0
-        fi
+        pause
     done
 }
 
@@ -4905,7 +4896,6 @@ main() {
             21) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
             22) update_xmenu_script || pause ;;
             23) opkg_settings_menu ;;
-            24) backup_configs; pause ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac

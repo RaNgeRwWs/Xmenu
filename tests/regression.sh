@@ -104,8 +104,10 @@ test "$(xmenu_opkg_feed_path)" = '/aarch64-k3.10' || fail 'trailing slash feed p
 # Проверяем новый список и маршрутизацию пунктов 4/5.
 terminal_width() { printf 100; }
 _read_or_eof() { _read_value=0; return 0; }
+BRIGHT_CYAN=$(printf '\033[1;38;5;51m')
 opkg_settings_menu > "$test_dir/menu.txt"
 grep -q 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.' "$test_dir/menu.txt" || fail 'manual menu label split'
+grep -Fq "${BRIGHT_CYAN}Репозитории OPKG / Entware:" "$test_dir/menu.txt" || fail 'OPKG title not highlighted'
 grep -q 'Текущий:.*Working' "$test_dir/menu.txt" || fail 'active repository missing'
 if grep -q 'Создать копию текущего\|6\.' "$test_dir/menu.txt"; then fail 'removed menu item still present'; fi
 test_option=4
@@ -130,6 +132,41 @@ xmenu_opkg_manual_mirror_menu > "$test_dir/manual-menu.txt" || fail 'manual mirr
 grep -q '✓ Working' "$test_dir/manual-menu.txt" || fail 'current manual choice not marked'
 grep -q '^src/gz entware http://blocked.test/aarch64-k3.10$' "$test_dir/opkg.conf" || fail 'manual selection not applied'
 
+# Меню удаления сохраняет постоянные номера; резервное копирование оставлено CLI-командой.
+pause() { return 0; }
+_read_or_eof() { _read_value=0; return 0; }
+remove_components_menu > "$test_dir/remove-menu.txt"
+for menu_entry in \
+    '1\. .*XKeen — полная деинсталляция' \
+    '2\. .*XKeen UI — zxc-rv' \
+    '3\. .*DPI Detector' \
+    '4\. .*nfqws2-keenetic' \
+    '5\. .*nfqws-keenetic-web' \
+    '6\. .*Mihomo' \
+    '7\. .*Удалить все пакеты NFQWS' \
+    '8\. .*Удалить резервные копии' \
+    '9\. .*Удалить все blobs NFQWS2' \
+    '10\. .*Удалить все бэкапы Xmenu' \
+    '11\. .*Другие установленные компоненты'; do
+    grep -q "$menu_entry" "$test_dir/remove-menu.txt" || fail "removal menu entry missing: $menu_entry"
+done
+
+# Stale marker must not mark a different strategy as active.
+CACHE_DIR="$test_dir/strategies"
+ROOT_DIR="$test_dir/strategy-data"
+mkdir -p "$CACHE_DIR/nfqws2" "$ROOT_DIR"
+strategy_test_conf="$test_dir/nfqws2.conf"
+printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_test_conf"
+cp "$strategy_test_conf" "$CACHE_DIR/nfqws2/fake_tls_auto_alt2.conf"
+printf 'NFQWS_ARGS="--dpi-desync=none"\n' > "$CACHE_DIR/nfqws2/alt.conf"
+printf 'alt.conf\n' > "$ROOT_DIR/active-strategy-nfqws2"
+sync_strategies() { return 0; }
+active_conf() { printf '%s|/opt/etc/nfqws2/nfqws2.conf' "$strategy_test_conf"; }
+strategy_menu > "$test_dir/strategy-menu.txt" || fail 'strategy menu render failed'
+grep -q 'fake_tls_auto_alt2\.conf.*— Активная стратегия' "$test_dir/strategy-menu.txt" || fail 'matching strategy not identified active'
+if grep -q 'alt\.conf.*— Активная стратегия' "$test_dir/strategy-menu.txt"; then fail 'stale marker was shown as active'; fi
+grep -Fq "$BRIGHT_CYAN" "$test_dir/strategy-menu.txt" || fail 'active strategy not highlighted in bright cyan'
+
 # Компактный экран с восемью компонентами помещается в высоту скриншота.
 _XMENU_DEVICE_CACHE_READY=1
 _XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
@@ -148,7 +185,9 @@ render_component_statuses() {
 }
 render_menu > "$test_dir/main-menu.txt"
 test "$(wc -l < "$test_dir/main-menu.txt")" -le 54 || fail 'menu still exceeds screenshot height'
-grep -q '24\. .*Создать резервную' "$test_dir/main-menu.txt" || fail 'last action missing'
+grep -q '23\. .*Настройки OPKG' "$test_dir/main-menu.txt" || fail 'OPKG action missing'
+grep -q '19\. .*Сменить язык: RU / EN (change language)' "$test_dir/main-menu.txt" || fail 'language option missing'
+if grep -q 'Интерфейс и язык:\|24\. .*резервную копию' "$test_dir/main-menu.txt"; then fail 'removed menu entry remains'; fi
 grep -q '0\. .*Выход' "$test_dir/main-menu.txt" || fail 'exit missing'
 grep -Fq "${CYAN}Модель: Hopper (NC-3811) 5.1.7 aarch64" "$test_dir/main-menu.txt" || fail 'compact cyan device line missing'
 grep -Fq "${CYAN}  ↑" "$test_dir/main-menu.txt" || fail 'update notice is not cyan'
@@ -159,7 +198,7 @@ check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
 LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
     text=$0; sub(/^ */, "", text); gsub(/[\200-\277]/, "", text)
-    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)) exit 1; found=1
+    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)-6) exit 1; found=1
 } END {if (!found) exit 1}' "$test_dir/plain-menu.txt" || fail 'title not centered in frame'
 
 # Открытие двух меню не должно удерживать общий lock сессии.
