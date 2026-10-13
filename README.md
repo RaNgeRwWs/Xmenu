@@ -23,19 +23,25 @@ XKeen · Xray / Mihomo · NFQWS / NFQWS2 · стратегии · OPKG · диа
 mkdir -p /opt/bin && curl -fL --retry 3 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
-### 2. jsDelivr — зеркало GitHub
+### 2. GitHub Raw через `wget`
+
+```sh
+mkdir -p /opt/bin && wget -O /tmp/xmenu.sh 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
+```
+
+### 3. jsDelivr — зеркало GitHub
 
 ```sh
 mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
-### 3. ghproxy — дополнительный маршрут
+### 4. ghproxy — дополнительный маршрут
 
 ```sh
 mkdir -p /opt/bin && curl -fL --retry 3 'https://ghproxy.net/https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
-Команда сначала проверяет синтаксис загрузки, затем сохраняет прежний `/opt/bin/xmenu` и запускает новую копию. Если `curl` не установлен, поставь его командой `opkg update && opkg install curl`; при проблеме с одним адресом попробуй следующий.
+Каждая команда сначала проверяет синтаксис загруженного скрипта, затем сохраняет прежний `/opt/bin/xmenu` и запускает новую копию. Для способов 1, 3 и 4 нужен `curl`; если он не установлен, выполни `opkg update && opkg install curl`. Для способа 2 нужен `wget`. При проблеме с одним адресом попробуй следующий.
 
 После установки меню открывается командой:
 
@@ -72,6 +78,12 @@ Xmenu объединяет установщики и повседневные д
 | **Обслуживание** | Удаление выбранных компонентов, очистка резервных файлов и blobs, диагностика и смена языка RU / EN. |
 
 В верхней части меню отображаются модель, KeeneticOS, архитектура и найденные компоненты. Проверка обновления Xmenu выполняется в фоне; доступное обновление показывается бирюзовой строкой под пунктом `U`.
+
+### Пример блока состояния `nfqws-menu`
+
+На изображении показано отдельное связанное меню `nfqws-menu`, которое Xmenu использует для некоторых утилит. Это пример его блока состояния и экрана установки, а не снимок главного меню Xmenu.
+
+![Пример блока состояния и установки в nfqws-menu](docs/images/nfqws-menu-status-example.png)
 
 ## Требования
 
@@ -112,6 +124,10 @@ Xmenu не устанавливает Entware и модули ядра авто�
   23    Настройки OPKG / зеркала Entware
   0     Выход
 ```
+
+Пример компоновки другого связанного инструмента `nfqws-menu` приведён ниже. Он показывает группировку пунктов и отступы; интерфейс Xmenu имеет собственную нумерацию и набор разделов.
+
+![Пример структуры меню nfqws-menu](docs/images/nfqws-menu-layout-example.png)
 
 `U` в приглашении меню запускает немедленную проверку новой версии Xmenu. Она не устанавливает обновление: для установки выбери пункт **22**. В главном меню Xmenu можно одновременно работать из нескольких SSH-сессий; одновременная запись настроек сериализуется на время операции.
 
@@ -187,6 +203,9 @@ xmenu backup          # создать архив конфигураций
 ├── xmenu-v1.0.sh                 основной POSIX sh / BusyBox ash скрипт
 ├── README.md                     установка и справочник пользователя
 ├── CHANGELOG.md                  история изменений
+├── docs/images/                  примеры интерфейса nfqws-menu
+│   ├── nfqws-menu-status-example.png
+│   └── nfqws-menu-layout-example.png
 ├── tests/regression.sh           сценарии регрессии с временными конфигами
 ├── tests/menu_input.py           проверка ввода в PTY
 └── .github/workflows/             CI: синтаксис, ShellCheck и регрессии
