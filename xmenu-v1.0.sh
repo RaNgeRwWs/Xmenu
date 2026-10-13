@@ -49,6 +49,8 @@ stop_component_status_refresh() {
     return 0
 }
 
+# Параметр final передаётся из EXIT trap; старые версии ShellCheck его не учитывают.
+# shellcheck disable=SC2120
 cleanup() {
     _cleanup_mode=${1:-release}
     if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ]; then
