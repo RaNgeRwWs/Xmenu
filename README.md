@@ -45,14 +45,7 @@ cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
 ### 3. jsDelivr — зеркало GitHub
 
 ```sh
-mkdir -p /opt/bin
-curl -fL --retry 3 \
-  'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' \
-  -o /tmp/xmenu.sh &&
-sh -n /tmp/xmenu.sh &&
-{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
-cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
-/opt/bin/xmenu
+mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
 Все способы проверяют синтаксис скрипта до установки и сохраняют прежнюю версию в резервную копию. Для вариантов 1 и 3 нужен `curl`, для варианта 2 — `wget`. Установить оба инструмента можно командой `opkg update && opkg install curl wget`. Если основной адрес недоступен, используй альтернативный.
