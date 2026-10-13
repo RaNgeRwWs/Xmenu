@@ -37,12 +37,7 @@ mkdir -p /opt/bin && wget -O /tmp/xmenu.sh 'https://raw.githubusercontent.com/ra
 mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
 ```
 
-Для способов 1 и 3 нужен `curl`, для способа 2 — `wget`. Если утилиты отсутствуют, установи их из Entware:
-
-```sh
-opkg update
-opkg install curl wget
-```
+Для способов 1 и 3 нужен `curl`, для способа 2 — `wget`. Если утилиты отсутствуют, установи их из Entware одной командой: `opkg update && opkg install curl wget`.
 
 При успешном запуске меню показывает модель устройства, версию KeeneticOS, архитектуру и обнаруженные компоненты. Для следующего запуска используй:
 
