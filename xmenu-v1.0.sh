@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.3.3 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.3.3"
+# Xmenu ◆ v1.4.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.4.0"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xmenu"
@@ -2266,6 +2266,20 @@ xmenu_process_start() {
     sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
 }
 
+# PID может быть повторно использован после завершения процесса. Если в lock
+# записано время старта, сверяем его с /proc, чтобы не принять чужую сессию
+# за прежнего владельца блокировки.
+xmenu_lock_pid_is_owner() {
+    _xlpio_pid=$1
+    _xlpio_expected_start=${2:-}
+    case "$_xlpio_pid" in ''|*[!0-9]*|0) return 1 ;; esac
+    kill -0 "$_xlpio_pid" 2>/dev/null || return 1
+    [ -n "$_xlpio_expected_start" ] || return 0
+    _xlpio_actual_start=$(xmenu_process_start "$_xlpio_pid" 2>/dev/null || :)
+    # Если /proc недоступен, лучше сохранить блокировку, чем прервать живую сессию.
+    [ -z "$_xlpio_actual_start" ] || [ "$_xlpio_actual_start" = "$_xlpio_expected_start" ]
+}
+
 release_operation_lock() {
     if [ "$LOCK_HELD" = 1 ] && [ -d "$LOCK_DIR" ] &&
        [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || :)" = "$$" ]; then
@@ -2682,16 +2696,15 @@ render_component_statuses_sync() {
 component_refresh_is_running() {
     [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 1
     _crir_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
+    _crir_worker_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_start" 2>/dev/null || :)
     case "$_crir_worker" in
         ''|*[!0-9]*)
             _crir_owner=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)
-            case "$_crir_owner" in
-                ''|*[!0-9]*) ;;
-                *) if kill -0 "$_crir_owner" 2>/dev/null; then return 0; fi ;;
-            esac
+            _crir_owner_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_start" 2>/dev/null || :)
+            xmenu_lock_pid_is_owner "$_crir_owner" "$_crir_owner_start" && return 0
             ;;
         *)
-            if kill -0 "$_crir_worker" 2>/dev/null; then return 0; fi
+            xmenu_lock_pid_is_owner "$_crir_worker" "$_crir_worker_start" && return 0
             ;;
     esac
     rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
@@ -2709,6 +2722,8 @@ start_component_status_refresh() {
         rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
         return 1
     }
+    _scr_start=$(xmenu_process_start "$$" 2>/dev/null || :)
+    [ -z "$_scr_start" ] || printf '%s\n' "$_scr_start" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_start" 2>/dev/null || :
 
     # Resolve the script currently running instead of assuming /opt/bin/xmenu.
     case "$0" in
@@ -2730,6 +2745,7 @@ start_component_status_refresh() {
     # and remove the lock before check_pid has been published by the parent.
     sh -c '
         printf "%s\n" "$$" > "$1/check_pid" 2>/dev/null || exit 1
+        sed "s/^.*) //" "/proc/$$/stat" 2>/dev/null | awk "{print \$20}" > "$1/check_start" 2>/dev/null || :
         exec sh "$2" __refresh-component-cache "$3"
     ' xmenu-component-refresh "$XMENU_COMPONENT_REFRESH_LOCK" "$_scr_source" "$$" </dev/null >/dev/null 2>&1 &
     return 0
@@ -3270,8 +3286,9 @@ xmenu_start_update_check() {
     mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
     if ! mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null; then
         _xsc_stale_pid=$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)
+        _xsc_stale_start=$(cat "$XMENU_UPDATE_LOCK/menu_start" 2>/dev/null || :)
         case "$_xsc_stale_pid" in ''|*[!0-9]*) _xsc_stale_pid='' ;; esac
-        if [ -z "$_xsc_stale_pid" ] || ! kill -0 "$_xsc_stale_pid" 2>/dev/null; then
+        if ! xmenu_lock_pid_is_owner "$_xsc_stale_pid" "$_xsc_stale_start"; then
             rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
             mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null || return 0
         else
@@ -3279,6 +3296,8 @@ xmenu_start_update_check() {
         fi
     fi
     printf '%s\n' "$$" > "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || { rm -rf "$XMENU_UPDATE_LOCK"; return 1; }
+    _xsc_start=$(xmenu_process_start "$$" 2>/dev/null || :)
+    [ -z "$_xsc_start" ] || printf '%s\n' "$_xsc_start" > "$XMENU_UPDATE_LOCK/menu_start" 2>/dev/null || :
     ( xmenu_update_check_worker "$$" ) </dev/null >/dev/null 2>&1 &
     XMENU_UPDATE_CHECK_PID=$!
     printf '%s\n' "$XMENU_UPDATE_CHECK_PID" > "$XMENU_UPDATE_LOCK/check_pid" 2>/dev/null || :

@@ -46,6 +46,11 @@ printf '\n' | confirm_yes 'Install?' || fail 'Enter default changed'
 
 acquire_lock || fail 'operation lock acquisition'
 if acquire_lock; then fail 'live operation lock bypassed'; fi
+test_process_start=$(xmenu_process_start "$$") || fail 'could not read current process start time'
+xmenu_lock_pid_is_owner "$$" "$test_process_start" || fail 'matching live lock owner was rejected'
+test_wrong_start=0
+[ "$test_process_start" = "$test_wrong_start" ] && test_wrong_start=1
+if xmenu_lock_pid_is_owner "$$" "$test_wrong_start"; then fail 'reused PID with a different start time was accepted'; fi
 cleanup
 mkdir "$LOCK_DIR"
 acquire_lock || fail 'empty stale lock not recovered'
@@ -123,7 +128,7 @@ confirm() { return 0; }
 opkg() { printf '%s\n' "$1" > "$test_dir/dispatched"; }
 opkg_settings_menu >/dev/null
 test "$(cat "$test_dir/dispatched")" = update || fail 'opkg update number wrong'
-version_is_older 1.3.2 1.3.3 || fail 'version ordering'
+version_is_older 1.3.3 1.4.0 || fail 'version ordering'
 
 # Ручной выбор открывается и меняет зеркало без сетевых проверок.
 xmenu_opkg_check_mirrors() { fail 'manual selection started availability checks'; }
@@ -175,7 +180,7 @@ _XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
 _XMENU_ARCH_CACHE=aarch64
 CYAN=$(printf '\033[36m')
 RESET=$(printf '\033[0m')
-xmenu_cached_remote_version() { printf '1.3.4'; }
+xmenu_cached_remote_version() { printf '1.4.1'; }
 render_component_statuses() {
     say 'Установленные компоненты:'
     component_table_header
@@ -198,7 +203,7 @@ sed "s/$escape\[[0-9;]*m//g" "$test_dir/main-menu.txt" > "$test_dir/plain-menu.t
 update_line=$(grep -n '↑ Доступно обновление' "$test_dir/plain-menu.txt" | cut -d: -f1)
 check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-menu.txt" | cut -d: -f1)
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
-LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
+LC_ALL=C awk '/Xmenu ◆ v1.4.0/ {
     match($0, /[^ ]/); if (RSTART-1 != 12) exit 1
     title_line=NR; found=1
 } title_line && NR == title_line + 1 && $0 !~ /^=+$/ {exit 1}

@@ -19,7 +19,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
         library.write_text(source.read_text().replace('\nmain "$@"\n', '\n'), encoding="utf-8")
         harness = Path(directory) / "prompt.sh"
         version_file = Path(directory) / "version"
-        version_file.write_text("1.3.3")
+        version_file.write_text("1.4.0")
         setup = 'xmenu_show_pending_update_notice() { :; }\n'
         if pending:
             setup = (
@@ -63,7 +63,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
             if interrupt:
                 time.sleep(0.2)
                 if pending:
-                    version_file.write_text("1.3.4")
+                    version_file.write_text("1.4.1")
                 process.send_signal(signal.SIGUSR1)
                 time.sleep(0.2)
                 assert process.poll() is None, "menu exited on SIGUSR1"
@@ -76,7 +76,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
             if pending:
                 assert output.count("↑".encode()) == 1, output.decode(errors="replace")
                 assert b"U. Check updates\r\n\x1b[36m  " in output
-                assert "v1.3.4".encode() in output
+                assert "v1.4.1".encode() in output
         finally:
             if process.poll() is None:
                 process.kill()
