@@ -145,6 +145,11 @@ EOF
     if mode_list_has_host "$audit_dir/rkn.conf" "$host"; then fail 'broken RKN argument still present'; fi
     grep -Fq -- "$host.backup" "$audit_dir/rkn.conf" || fail 'similar filename damaged during removal'
     grep -Fq "# $host" "$audit_dir/rkn.conf" || fail 'RKN comment damaged'
+    printf 'MODE_LIST="--hostlist=%s/nfqws2/lists/rknXlist"\n' "$audit_dir" > "$audit_dir/custom.conf"
+    printf 'MODE_LIST=""\n' > "$audit_dir/official.conf"
+    if strategy_configs_equal "$audit_dir/custom.conf" "$audit_dir/official.conf"; then fail 'custom RKN-like path was treated as official config'; fi
+    printf 'MODE_LIST="%s"\n' "$host" > "$audit_dir/custom.conf"
+    strategy_configs_equal "$audit_dir/custom.conf" "$audit_dir/official.conf" || fail 'optional exact RKN argument prevented strategy match'
 )
 
 (

@@ -1966,25 +1966,40 @@ active_conf() {
     elif is_installed nfqws-keenetic && [ -f /opt/etc/nfqws/nfqws.conf ]; then echo '/opt/etc/nfqws/nfqws.conf|/opt/etc/nfqws'
     else return 1; fi
 }
-# Сравниваем конфиг с кэшированной стратегией; игнорируем ISP_INTERFACE, комментарии и нашу добавку rkn.list.
+normalize_strategy_config() {
+    awk -v host1='--hostlist=/opt/etc/nfqws/lists/rkn.list' -v host2='--hostlist=/opt/etc/nfqws2/lists/rkn.list' '
+        function boundary(c) {return c=="" || c ~ /[[:space:]"\047]/}
+        function strip_host(line, host, rest, result, pos) {
+            rest=line; result=""
+            while ((pos=index(rest,host)) > 0) {
+                result=result substr(rest,1,pos-1)
+                rest=substr(rest,pos+length(host))
+                if (!boundary(substr(result,length(result),1)) || !boundary(substr(rest,1,1))) result=result host
+            }
+            return result rest
+        }
+        {
+            sub(/\r$/, "")
+            if ($0 ~ /^[[:space:]]*(#|$)/ || $0 ~ /^[[:space:]]*ISP_INTERFACE[[:space:]]*=/) next
+            line=strip_host(strip_host($0,host1),host2)
+            gsub(/[[:space:]][[:space:]]+/, " ", line)
+            gsub(/[[:space:]]*"/, "\"", line)
+            sub(/[[:space:]]*$/, "", line)
+            print line
+        }
+    ' "$1"
+}
+
+# Удаляем только точный аргумент rkn.list, иначе похожий пользовательский
+# путь мог ошибочно сделать кастомный конфиг равным официальной стратегии.
 strategy_configs_equal() {
     _sce_current=$1
     _sce_candidate=$2
     [ -f "$_sce_current" ] && [ -f "$_sce_candidate" ] || return 1
     _sce_a="$ROOT_DIR/.strategy-current.$$.tmp"
     _sce_b="$ROOT_DIR/.strategy-candidate.$$.tmp"
-    sed -e 's/\r$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' \
-        -e '/^[[:space:]]*ISP_INTERFACE[[:space:]]*=/d' \
-        -e 's|--hostlist=/opt/etc/nfqws2/lists/rkn.list||g' \
-        -e 's|--hostlist=/opt/etc/nfqws/rkn.list||g' \
-        -e 's/[[:space:]]\{2,\}/ /g' -e 's/[[:space:]]*"/"/g' -e 's/[[:space:]]*$//' \
-        "$_sce_current" > "$_sce_a" || { rm -f "$_sce_a" "$_sce_b"; return 1; }
-    sed -e 's/\r$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' \
-        -e '/^[[:space:]]*ISP_INTERFACE[[:space:]]*=/d' \
-        -e 's|--hostlist=/opt/etc/nfqws2/lists/rkn.list||g' \
-        -e 's|--hostlist=/opt/etc/nfqws/rkn.list||g' \
-        -e 's/[[:space:]]\{2,\}/ /g' -e 's/[[:space:]]*"/"/g' -e 's/[[:space:]]*$//' \
-        "$_sce_candidate" > "$_sce_b" || { rm -f "$_sce_a" "$_sce_b"; return 1; }
+    normalize_strategy_config "$_sce_current" > "$_sce_a" || { rm -f "$_sce_a" "$_sce_b"; return 1; }
+    normalize_strategy_config "$_sce_candidate" > "$_sce_b" || { rm -f "$_sce_a" "$_sce_b"; return 1; }
     if command -v cmp >/dev/null 2>&1; then
         cmp -s "$_sce_a" "$_sce_b" 2>/dev/null
         _sce_rc=$?
