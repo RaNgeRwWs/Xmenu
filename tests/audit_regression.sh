@@ -121,4 +121,69 @@ EOF
     test ! -d "$LOCK_DIR" || fail 'failed strategy kept operation lock'
 )
 
+(
+    mkdir -p "$audit_dir/nfqws2/lists"
+    printf 'NFQWS_ARGS="--hostlist=%s/nfqws2/lists/../../escaped.list"\n' "$audit_dir" > "$audit_dir/list.conf"
+    fetch() { printf 'example.test\n' > "$2"; }
+    if update_lists_for "$audit_dir/list.conf" 2 >/dev/null; then fail 'list traversal accepted'; fi
+    test ! -e "$audit_dir/escaped.list" || fail 'list written outside NFQWS directory'
+    : > "$audit_dir/nfqws2/lists/user.list"
+    : > "$audit_dir/nfqws2/lists/auto.list"
+    printf 'NFQWS_ARGS="--hostlist=%s/nfqws2/lists/user.list --hostlist-auto=%s/nfqws2/lists/auto.list"\n' "$audit_dir" "$audit_dir" > "$audit_dir/list.conf"
+    fetch() { fail 'existing empty list fetched again'; }
+    update_lists_for "$audit_dir/list.conf" 2 >/dev/null || fail 'valid empty lists rejected'
+    test "$LISTS_CHANGED" = 0 || fail 'existing empty list requests restart'
+    printf 'MODE_LIST="--hostlist=%s/nfqws2/lists/rkn.list.backup"\n' "$audit_dir" > "$audit_dir/rkn.conf"
+    host="--hostlist=$audit_dir/nfqws2/lists/rkn.list"
+    if mode_list_has_host "$audit_dir/rkn.conf" "$host"; then fail 'hostlist prefix treated as exact argument'; fi
+    saved_hash=$(sha256_file "$audit_dir/rkn.conf")
+    drop_missing_rkn_reference "$audit_dir/rkn.conf" 2 >/dev/null || fail 'similar RKN filename processing failed'
+    test "$(sha256_file "$audit_dir/rkn.conf")" = "$saved_hash" || fail 'rkn.list.backup reference damaged'
+    printf 'MODE_LIST="%s %s.backup"\n# %s\n' "$host" "$host" "$host" > "$audit_dir/rkn.conf"
+    mode_list_has_host "$audit_dir/rkn.conf" "$host" || fail 'exact RKN argument not found'
+    drop_missing_rkn_reference "$audit_dir/rkn.conf" 2 >/dev/null || fail 'broken RKN argument not removed'
+    if mode_list_has_host "$audit_dir/rkn.conf" "$host"; then fail 'broken RKN argument still present'; fi
+    grep -Fq -- "$host.backup" "$audit_dir/rkn.conf" || fail 'similar filename damaged during removal'
+    grep -Fq "# $host" "$audit_dir/rkn.conf" || fail 'RKN comment damaged'
+)
+
+(
+    mkdir -p "$audit_dir/backup-a" "$audit_dir/backup-b" "$audit_dir/parallel/root"
+    printf 'FIRST\n' > "$audit_dir/backup-a/settings.conf"
+    printf 'SECOND\n' > "$audit_dir/backup-b/settings.conf"
+    touch -t 200001010000 "$audit_dir/backup-a/settings.conf" "$audit_dir/backup-b/settings.conf"
+    cat > "$audit_dir/backup-worker.sh" <<'EOF'
+#!/bin/sh
+set -eu
+. "$1"
+trap - 0
+ROOT_DIR="$2/root"
+BACKUP_DIR="$2/backups"
+date() { printf '20000101-000000\n'; }
+cp() {
+    : > "$ROOT_DIR/arrived.$$"
+    attempts=0
+    while [ "$(find "$ROOT_DIR" -name 'arrived.*' | wc -l)" -lt 2 ]; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 100 ] || return 1
+        sleep 0.05
+    done
+    command cp "$@"
+}
+backup_file "$3" >/dev/null
+EOF
+    sh "$audit_dir/backup-worker.sh" "$audit_dir/library.sh" "$audit_dir/parallel" "$audit_dir/backup-a/settings.conf" &
+    backup_first=$!
+    sh "$audit_dir/backup-worker.sh" "$audit_dir/library.sh" "$audit_dir/parallel" "$audit_dir/backup-b/settings.conf" &
+    backup_second=$!
+    wait "$backup_first" || fail 'first parallel backup failed'
+    wait "$backup_second" || fail 'second parallel backup failed'
+    test "$(find "$audit_dir/parallel/backups" -type f | wc -l)" -eq 2 || fail 'parallel backup overwritten'
+    grep -l FIRST "$audit_dir/parallel/backups"/* >/dev/null || fail 'first backup content lost'
+    grep -l SECOND "$audit_dir/parallel/backups"/* >/dev/null || fail 'second backup content lost'
+    for archive in "$audit_dir/parallel/backups"/*; do
+        test "$(stat -c '%Y' "$archive")" -gt 946684800 || fail 'backup still has old source timestamp'
+    done
+)
+
 printf 'PASS: deep audit regression scenarios\n'

@@ -651,9 +651,10 @@ backup_file() {
     [ -L "$_f" ] && { say "${YELLOW}Бэкап симлинка пропущен: $_f${RESET}"; return 1; }
     [ -e "$_f" ] || return 0
     [ -f "$_f" ] || return 0
-    mkdir -p "$BACKUP_DIR" || return 1
+    _backup_dir=${2:-$BACKUP_DIR}
+    mkdir -p "$_backup_dir" || return 1
     _ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null); [ -n "$_ts" ] || _ts="backup-$$"
-    _dest_base="$BACKUP_DIR/$(basename "$_f").$_ts"
+    _dest_base="$_backup_dir/$(basename "$_f").$_ts.$$"
     _dest="$_dest_base.bak"
     _backup_seq=1
     # Do not overwrite an earlier backup created during the same second.
@@ -662,6 +663,9 @@ backup_file() {
         _backup_seq=$((_backup_seq + 1))
     done
     cp -p "$_f" "$_dest" || { say "${RED}Не удалось создать бэкап $_f${RESET}"; return 1; }
+    # Выбор последнего бэкапа использует mtime: это время создания копии,
+    # а не давняя дата исходного файла, которую переносит cp -p.
+    touch -m "$_dest" || { say "${RED}Не удалось записать время создания бэкапа $_dest${RESET}"; return 1; }
     say "${MUTED}Бэкап: $_dest${RESET}"
 }
 backup_configs() {
@@ -672,7 +676,7 @@ backup_configs() {
         [ -e "$_p" ] && [ ! -L "$_p" ] && set -- "$@" "${_p#/}"
     done
     [ "$#" -gt 0 ] || { say 'Конфигурации для бэкапа не найдены.'; return 0; }
-    _archive_base="$BACKUP_DIR/configs-$_ts"
+    _archive_base="$BACKUP_DIR/configs-$_ts.$$"
     if command -v gzip >/dev/null 2>&1; then
         _archive_ext='.tar.gz'
     else
@@ -1606,8 +1610,8 @@ update_blobs_for() {
         mkdir -p "$ROOT_DIR/manifests" || { rm -rf "$_ub_work"; return 1; }
         if fetch "$NF_REPO/strategies/blobs/SHA256SUMS" "$_ub_work/blobs-SHA256SUMS" 30 &&
            awk 'NF>=2 && length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ {ok++} END {exit(ok?0:1)}' "$_ub_work/blobs-SHA256SUMS"; then
-            cp "$_ub_work/blobs-SHA256SUMS" "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp" &&
-                mv "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp" "$ROOT_DIR/manifests/blobs-SHA256SUMS" || {
+            cp "$_ub_work/blobs-SHA256SUMS" "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp.$$" &&
+                mv "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp.$$" "$ROOT_DIR/manifests/blobs-SHA256SUMS" || {
                     rm -rf "$_ub_work"; return 1;
                 }
         else
@@ -1667,8 +1671,7 @@ update_blobs_for() {
         if fetch "$NF_REPO/strategies/blobs/$_ub_name" "$_ub_dl" 60 && sha_ok "$_ub_dl" "$_ub_hash"; then
             mkdir -p "$(dirname "$_ub_path")" || { rm -f "$_ub_dl"; _ub_failed=1; continue; }
             if [ -f "$_ub_path" ]; then
-                _ub_ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null || printf 'backup')
-                cp -p "$_ub_path" "$BACKUP_DIR/blobs/$_ub_name.$_ub_ts.bak" || {
+                backup_file "$_ub_path" "$BACKUP_DIR/blobs" || {
                     rm -f "$_ub_dl"; say "${RED}Не удалось создать бэкап $_ub_path; blob не заменён.${RESET}"; _ub_failed=1; continue;
                 }
             fi
@@ -1698,9 +1701,9 @@ drop_missing_rkn_reference() {
     _dmr_ver=$2
     case "$_dmr_ver" in
         2) _dmr_list='/opt/etc/nfqws2/lists/rkn.list'
-           _dmr_path_esc='/opt/etc/nfqws2/lists/rkn\.list' ;;
+           ;;
         1) _dmr_list='/opt/etc/nfqws/rkn.list'
-           _dmr_path_esc='/opt/etc/nfqws/rkn\.list' ;;
+           ;;
         *) return 0 ;;
     esac
     [ -s "$_dmr_list" ] && return 0
@@ -1717,7 +1720,19 @@ drop_missing_rkn_reference() {
     _dmr_out="${_dmr_tmp}.out"
     rm -f "$_dmr_tmp" "$_dmr_out"
     cp -p "$_dmr_conf" "$_dmr_tmp" || { rm -f "$_dmr_tmp"; return 1; }
-    sed "s|[[:space:]]*--hostlist=$_dmr_path_esc||g" "$_dmr_tmp" > "$_dmr_out" || {
+    awk -v host="$_dmr_host" '
+        function boundary(c) {return c=="" || c ~ /[[:space:]"\047]/}
+        /^[[:space:]]*#/ {print; next}
+        {
+            rest=$0; result=""
+            while ((pos=index(rest,host)) > 0) {
+                result=result substr(rest,1,pos-1)
+                rest=substr(rest,pos+length(host))
+                if (!boundary(substr(result,length(result),1)) || !boundary(substr(rest,1,1))) result=result host
+            }
+            print result rest
+        }
+    ' "$_dmr_tmp" > "$_dmr_out" || {
         rm -f "$_dmr_tmp" "$_dmr_out"
         return 1
     }
@@ -1738,10 +1753,11 @@ drop_missing_rkn_reference() {
             backup_file "$_dmr_conf" || { rm -f "$_dmr_tmp"; return 1; }
             ;;
     esac
-    if ! mv -f "$_dmr_tmp" "$_dmr_conf"; then
+    if ! replace_shell_config "$_dmr_tmp" "$_dmr_conf"; then
         rm -f "$_dmr_tmp"
         return 1
     fi
+    rm -f "$_dmr_tmp"
     RKN_REFERENCE_REMOVED=1
     say "${YELLOW}rkn.list не найден: удалена только ссылка на него из конфига. Стратегия продолжит работу без этого необязательного списка; остальные параметры сохранены.${RESET}"
     return 0
@@ -1782,6 +1798,11 @@ update_lists_for() {
     while IFS= read -r _ul_ref || [ -n "$_ul_ref" ]; do
         [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ul_work"; say 'Загрузка списков прервана пользователем.'; return 130; }
         [ -n "$_ul_ref" ] || continue
+        case "$_ul_ref" in */../*|*/..|*/./*|*'//'*)
+            say "${RED}Недопустимый путь списка: $_ul_ref${RESET}"
+            _ul_fail=$((_ul_fail + 1))
+            continue ;;
+        esac
         _ul_i=$((_ul_i + 1))
         _ul_name=${_ul_ref##*/}
         case "$_ul_name" in
@@ -1796,7 +1817,7 @@ update_lists_for() {
         case "$_ul_ref" in
             "$_ul_base"/*) _ul_path=$_ul_ref ;;
             /*)
-                if [ -s "$_ul_ref" ]; then continue; fi
+                if [ -f "$_ul_ref" ]; then continue; fi
                 say "${RED}Отсутствующий список указан вне каталога $_ul_base: $_ul_ref${RESET}"
                 _ul_fail=$((_ul_fail + 1))
                 continue
@@ -1804,7 +1825,8 @@ update_lists_for() {
             *) _ul_path="$_ul_base/$_ul_name" ;;
         esac
 
-        if [ -s "$_ul_path" ]; then
+        # Пустые user/exclude/auto-списки допустимы: скачиваем только отсутствующие.
+        if [ -f "$_ul_path" ]; then
             continue
         fi
         if [ -L "$_ul_path" ]; then
@@ -2164,7 +2186,15 @@ XMENU_STRATEGY_ORDER
 mode_list_has_host() {
     _ml_conf=$1
     _ml_host=$2
-    awk -v host="$_ml_host" '/^[[:space:]]*MODE_LIST[[:space:]]*=/ && index($0, host) > 0 {found=1} END {exit(found?0:1)}' "$_ml_conf" 2>/dev/null
+    awk -v host="$_ml_host" '
+        /^[[:space:]]*MODE_LIST[[:space:]]*=/ {
+            line=$0; sub(/^[^=]*=[[:space:]]*/, "", line)
+            sub(/[[:space:]]+#.*/, "", line); gsub(/["\047]/, "", line)
+            n=split(line, tokens, /[[:space:]]+/)
+            for (i=1; i<=n; i++) if (tokens[i]==host) found=1
+        }
+        END {exit(found?0:1)}
+    ' "$_ml_conf" 2>/dev/null
 }
 
 preserve_rkn_hostlist() {
@@ -2867,6 +2897,14 @@ show_status() {
 
 # Загружает rkn.list и добавляет его в MODE_LIST, не меняя другие параметры конфига.
 install_rkn_for() {
+    acquire_lock || return 1
+    install_rkn_for_locked "$1"
+    _irf_rc=$?
+    release_operation_lock
+    return "$_irf_rc"
+}
+
+install_rkn_for_locked() {
     _rkn_ver=$1
     case "$_rkn_ver" in
         2)
@@ -2937,7 +2975,7 @@ install_rkn_for() {
             return 1
         }
         backup_file "$_rkn_conf" || { rm -f "$_rkn_tmpconf"; return 1; }
-        cp "$_rkn_tmpconf" "$_rkn_conf" || { rm -f "$_rkn_tmpconf"; return 1; }
+        replace_shell_config "$_rkn_tmpconf" "$_rkn_conf" || { rm -f "$_rkn_tmpconf"; return 1; }
         rm -f "$_rkn_tmpconf"
         _rkn_changed=1
         say "${GREEN}rkn.list подключён к MODE_LIST.${RESET}"
