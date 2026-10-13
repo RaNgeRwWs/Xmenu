@@ -30,6 +30,7 @@ MENU_READING=0
 _LAST_MENU_INTERRUPT_TS=0
 _FETCH_FAIL_COUNT=0
 XMENU_UPDATE_REDRAW=0
+XMENU_UPDATE_NOTICE_VISIBLE=0
 XMENU_UPDATE_CHECK_PID=''
 XMENU_MANUAL_UPDATE_CHECK=0
 XMENU_UPDATE_CACHE="$ROOT_DIR/xmenu-update.cache"
@@ -3340,7 +3341,8 @@ xmenu_read_menu_prompt() {
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
             printf '\n'
-            return 2
+            xmenu_show_pending_update_notice
+            printf '%b' "${_xrmp_prompt}"
         fi
         read_uptime_tenths && _xrmp_before_ticks=$_uptime_tenths || _xrmp_before_ticks=''
         IFS= read -r -t 1 _read_value </dev/tty
@@ -3353,7 +3355,8 @@ xmenu_read_menu_prompt() {
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
             printf '\n'
-            return 2
+            xmenu_show_pending_update_notice
+            printf '%b' "${_xrmp_prompt}"
         fi
         if [ "${INTERRUPTED:-0}" = 1 ]; then return 1; fi
         if ! has_controlling_tty; then return 1; fi
@@ -3376,6 +3379,19 @@ xmenu_read_menu_prompt() {
             return $?
         fi
     done
+}
+
+xmenu_show_pending_update_notice() {
+    [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] && return 0
+    _xsp_latest=$(xmenu_cached_remote_version 2>/dev/null || :)
+    xmenu_valid_version "$_xsp_latest" || return 0
+    version_is_older "$APP_VERSION" "$_xsp_latest" || return 0
+    if [ "$(get_ui_lang)" = en ]; then
+        say "${GREEN}↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it.${RESET}"
+    else
+        say "${GREEN}↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки.${RESET}"
+    fi
+    XMENU_UPDATE_NOTICE_VISIBLE=1
 }
 
 update_xmenu_script() {
@@ -3760,7 +3776,6 @@ xmenu_opkg_check_mirrors() {
     xmenu_opkg_probe_all "$_ocm_force" 1 || { say "${RED}Не удалось проверить зеркала: проверь opkg.conf и сеть.${RESET}"; return 1; }
     _ocm_active=$(xmenu_opkg_active_mirror_url 2>/dev/null || :)
     _ocm_cache="$ROOT_DIR/opkg-mirrors-status.cache"
-    _ocm_feed_suffix=${_ocm_feed#/}
     line
     if [ "$_ocm_lang" = en ]; then
         say "${WHITE}◆ ENTWARE REPOSITORIES${RESET}"
@@ -3778,27 +3793,27 @@ xmenu_opkg_check_mirrors() {
         case "$_ocm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         case "$_ocm_base" in http://*|https://*) : ;; *) continue ;; esac
         _ocm_total=$((_ocm_total + 1))
-        _ocm_row=$(awk -F '|' -v id="$_ocm_id" '$1=="mirror=" id {print $2; exit}' "$_ocm_cache")
+        _ocm_row=$(awk -F '|' -v id="$_ocm_id" '$1=="mirror=" id {print substr($0, index($0, "|")+1); exit}' "$_ocm_cache")
         _ocm_state=${_ocm_row%%|*}
         _ocm_rest=${_ocm_row#*|}
         _ocm_ms=${_ocm_rest%%|*}
         _ocm_host_url=${_ocm_base#*://}; _ocm_host=${_ocm_host_url%%/*}
         _ocm_marker=''
-        [ "$_ocm_base" = "$_ocm_active" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  ✓ CURRENT'; else _ocm_marker='  ✓ ТЕКУЩЕЕ'; fi; }
+        [ "$_ocm_base" = "$_ocm_active" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  ✓ current'; else _ocm_marker='  ✓ текущее'; fi; }
         case "$_ocm_state" in
             available)
                 _ocm_available=$((_ocm_available + 1))
-                if [ "$_ocm_lang" = en ]; then _ocm_status="${GREEN}● AVAILABLE${RESET}"; _ocm_time="${_ocm_ms} ms"
-                else _ocm_status="${GREEN}● ДОСТУПНО${RESET}"; _ocm_time="${_ocm_ms} мс"; fi ;;
-            *) if [ "$_ocm_lang" = en ]; then _ocm_status="${RED}● UNAVAILABLE${RESET}"; _ocm_time='—'
-               else _ocm_status="${RED}● НЕДОСТУПНО${RESET}"; _ocm_time='—'; fi ;;
+                case "$_ocm_ms" in ''|*[!0-9]*|999999)
+                    if [ "$_ocm_lang" = en ]; then _ocm_time='time n/a'; else _ocm_time='время н/д'; fi ;;
+                    *) if [ "$_ocm_lang" = en ]; then _ocm_time="${_ocm_ms} ms"; else _ocm_time="${_ocm_ms} мс"; fi ;;
+                esac
+                if [ "$_ocm_lang" = en ]; then _ocm_status="${GREEN}● available${RESET}"
+                else _ocm_status="${GREEN}● доступно${RESET}"; fi ;;
+            *) if [ "$_ocm_lang" = en ]; then _ocm_status="${RED}● unavailable${RESET}"; _ocm_time='—'
+               else _ocm_status="${RED}● недоступно${RESET}"; _ocm_time='—'; fi ;;
         esac
-        say "  $_ocm_status  $_ocm_name — $_ocm_region$_ocm_marker"
-        if [ -n "$_ocm_feed_suffix" ]; then
-            say "      URL: ${_ocm_base%/}/$_ocm_feed_suffix/Packages.gz  ($_ocm_time)"
-        else
-            say "      URL: ${_ocm_base%/}/Packages.gz  ($_ocm_time)"
-        fi
+        say "  $_ocm_status  $_ocm_name [$_ocm_region] — $_ocm_time$_ocm_marker"
+        say "      URL: ${_ocm_base%/}"
     done < "$XMENU_OPKG_MIRRORS_FILE"
     line
     if [ "$_ocm_lang" = en ]; then say "Available repositories: ${GREEN}$_ocm_available${RESET} / $_ocm_total"
@@ -3817,7 +3832,7 @@ xmenu_opkg_auto_select_mirror() {
     _oas_best_ms=2147483647
     while IFS='|' read -r _oas_id _oas_name _oas_base _oas_region; do
         case "$_oas_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
-        _oas_row=$(awk -F '|' -v id="$_oas_id" '$1=="mirror=" id {print $2; exit}' "$_oas_cache")
+        _oas_row=$(awk -F '|' -v id="$_oas_id" '$1=="mirror=" id {print substr($0, index($0, "|")+1); exit}' "$_oas_cache")
         _oas_state=${_oas_row%%|*}
         _oas_rest=${_oas_row#*|}
         _oas_ms=${_oas_rest%%|*}
@@ -3896,7 +3911,7 @@ xmenu_opkg_manual_mirror_menu() {
         while IFS='|' read -r _omm_id _omm_name _omm_url _omm_region; do
             case "$_omm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
             case "$_omm_url" in http://*|https://*) : ;; *) continue ;; esac
-            menu_item "$_omm_id" "$_omm_name — $_omm_region ($_omm_url)"
+            menu_item "$_omm_id" "$_omm_name — $_omm_region"
         done < "$XMENU_OPKG_MIRRORS_FILE"
         menu_item R "$_omm_refresh"
         menu_item T "$_omm_test"
@@ -4086,6 +4101,7 @@ render_menu() {
     # Не вычислять отступ от COLUMNS/stty: на роутерах эти значения могут
     # различаться и снова визуально уводить заголовок далеко вправо.
     _title_pad_text=''
+    XMENU_UPDATE_NOTICE_VISIBLE=0
     printf '%s%s %s%s%s %s\n' \
         "$_title_pad_text" "${PURPLE}|${RESET}" "$WHITE" "$_title" "$RESET" "${PURPLE}|${RESET}"
     _latest_xmenu=$(xmenu_cached_remote_version 2>/dev/null || :)
@@ -4095,6 +4111,7 @@ render_menu() {
         else
             say "${GREEN}↑ Доступно обновление Xmenu v$_latest_xmenu${RESET}"
         fi
+        XMENU_UPDATE_NOTICE_VISIBLE=1
     fi
     say ''
 
