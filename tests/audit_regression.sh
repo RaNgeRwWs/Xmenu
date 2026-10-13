@@ -71,4 +71,54 @@ EOF
     grep -q -- '-t 1' "$audit_dir/timeouts" || fail 'wget retry limit not applied'
 )
 
+(
+    printf 'ISP_INTERFACE="eth3 eth4" # keep both\nNFQWS_ARGS="--old"\n' > "$audit_dir/live.conf"
+    printf 'ISP_INTERFACE="eth9"\r\nNFQWS_ARGS="--new"\r\n' > "$audit_dir/candidate.conf"
+    prepare_strategy_config "$audit_dir/live.conf" "$audit_dir/candidate.conf" || fail 'valid strategy preparation failed'
+    grep -Fq 'ISP_INTERFACE="eth3 eth4" # keep both' "$audit_dir/candidate.conf" || fail 'interface value or comment lost'
+    if LC_ALL=C grep -q "$(printf '\r')" "$audit_dir/candidate.conf"; then fail 'CRLF not normalized'; fi
+    chmod 640 "$audit_dir/live.conf"
+    saved_mode=$(stat -c '%a' "$audit_dir/live.conf")
+    replace_shell_config "$audit_dir/candidate.conf" "$audit_dir/live.conf" || fail 'atomic replacement failed'
+    grep -Fq 'NFQWS_ARGS="--new"' "$audit_dir/live.conf" || fail 'new config not installed'
+    test "$(stat -c '%a' "$audit_dir/live.conf")" = "$saved_mode" || fail 'config mode changed'
+    saved_hash=$(sha256_file "$audit_dir/live.conf")
+    printf 'NFQWS_ARGS="unterminated\n' > "$audit_dir/invalid.conf"
+    if replace_shell_config "$audit_dir/invalid.conf" "$audit_dir/live.conf" 2>/dev/null; then fail 'invalid shell config installed'; fi
+    test "$(sha256_file "$audit_dir/live.conf")" = "$saved_hash" || fail 'live config changed after syntax failure'
+    ln -s "$audit_dir/live.conf" "$audit_dir/config-link"
+    # Git Bash на NTFS может эмулировать ln -s копией; настоящие ссылки проверяет Linux CI.
+    if [ -L "$audit_dir/config-link" ]; then
+        if replace_shell_config "$audit_dir/candidate.conf" "$audit_dir/config-link"; then fail 'config symlink replaced'; fi
+    fi
+    # Имитируем ошибку записи после первых байтов (например, заполненный диск).
+    cat() { printf 'PARTIAL'; return 1; }
+    if replace_shell_config "$audit_dir/candidate.conf" "$audit_dir/live.conf"; then fail 'write failure ignored'; fi
+    test "$(sha256_file "$audit_dir/live.conf")" = "$saved_hash" || fail 'live config truncated on write failure'
+    test "$(find "$audit_dir" -name '*.xmenu.*' | wc -l)" -eq 0 || fail 'staged config leaked'
+)
+
+(
+    mkdir -p "$CACHE_DIR/nfqws2" "$audit_dir/nfqws2" "$ROOT_DIR/manifests"
+    printf 'NFQWS_ARGS="--old"\n' > "$audit_dir/nfqws2/nfqws2.conf"
+    printf 'NFQWS_ARGS="--new"\n' > "$CACHE_DIR/nfqws2/alt.conf"
+    printf 'PEER SESSION LIST\n' > "$ROOT_DIR/strategies.list"
+    sync_strategies() { return 0; }
+    active_conf() { printf '%s|%s' "$audit_dir/nfqws2/nfqws2.conf" "$audit_dir/nfqws2/blobs"; }
+    _read_or_eof() { _read_value=0; return 0; }
+    strategy_menu >/dev/null || fail 'strategy menu failed'
+    test "$(cat "$ROOT_DIR/strategies.list")" = 'PEER SESSION LIST' || fail 'another session strategy list overwritten'
+    test ! -e "$ROOT_DIR/strategies-list.$$" || fail 'session strategy list leaked'
+    # Проверенный SHA не заменяет проверку синтаксиса перед применением.
+    printf 'NFQWS_ARGS="unterminated\n' > "$CACHE_DIR/nfqws2/alt.conf"
+    printf '%s  strategies/nfqws2/alt.conf\n' "$(sha256_file "$CACHE_DIR/nfqws2/alt.conf")" > "$ROOT_DIR/manifests/SHA256SUMS"
+    original_hash=$(sha256_file "$audit_dir/nfqws2/nfqws2.conf")
+    _read_or_eof() { _read_value=01; return 0; }
+    confirm() { return 0; }
+    update_blobs_for() { fail 'invalid strategy reached blob installation'; }
+    if strategy_menu >/dev/null 2>&1; then fail 'invalid strategy reported success'; fi
+    test "$(sha256_file "$audit_dir/nfqws2/nfqws2.conf")" = "$original_hash" || fail 'invalid strategy changed live config'
+    test ! -d "$LOCK_DIR" || fail 'failed strategy kept operation lock'
+)
+
 printf 'PASS: deep audit regression scenarios\n'

@@ -1439,6 +1439,52 @@ sha_ok() {
     [ "$_got" = "$_expected" ]
 }
 verify_sum() { sha_ok "$1" "$2"; }
+
+# Сначала полностью записываем и проверяем файл рядом с действующим конфигом.
+# Только rename меняет живой конфиг: ошибка записи не обрежет рабочий файл.
+replace_shell_config() (
+    _rsc_source=$1
+    _rsc_target=$2
+    [ -f "$_rsc_source" ] && [ ! -L "$_rsc_source" ] || return 1
+    [ ! -L "$_rsc_target" ] || return 1
+    if [ -e "$_rsc_target" ] && [ ! -f "$_rsc_target" ]; then return 1; fi
+    _rsc_tmp=$(mktemp "${_rsc_target}.xmenu.XXXXXX") || return 1
+    trap 'rm -f "$_rsc_tmp"' 0
+    trap 'exit 130' INT TERM HUP
+    if [ -f "$_rsc_target" ]; then cp -p "$_rsc_target" "$_rsc_tmp" || return 1; fi
+    cat "$_rsc_source" > "$_rsc_tmp" || return 1
+    sh -n "$_rsc_tmp" || return 1
+    [ "${INTERRUPTED:-0}" = 0 ] || return 130
+    mv -f "$_rsc_tmp" "$_rsc_target"
+)
+
+# Копируем присваивание интерфейса буквально, без вставки значения в sed.
+# Сохраняются кавычки, комментарии и список интерфейсов из текущего конфига.
+prepare_strategy_config() {
+    _psc_old=$1
+    _psc_new=$2
+    _psc_tmp="$_psc_new.norm"
+    awk '
+        FILENAME == ARGV[1] {
+            if (!have_interface && /^[[:space:]]*ISP_INTERFACE[[:space:]]*=/) {
+                interface=$0; sub(/\r$/, "", interface); have_interface=1
+            }
+            next
+        }
+        {
+            sub(/\r$/, "")
+            if (have_interface && /^[[:space:]]*ISP_INTERFACE[[:space:]]*=/) {
+                print interface; replaced=1
+            } else print
+        }
+        END {if (have_interface && !replaced) print interface}
+    ' "$_psc_old" "$_psc_new" > "$_psc_tmp" &&
+        sh -n "$_psc_tmp" && mv -f "$_psc_tmp" "$_psc_new" || {
+            rm -f "$_psc_tmp"
+            say "${RED}Не удалось подготовить корректный конфиг стратегии; действующий файл сохранён.${RESET}"
+            return 1
+        }
+}
 manifest_relpath() {
     # SHA256SUMS: 64 шестнадцатеричных символа, пробелы и путь (возможно со звёздочкой).
     printf '%s\n' "$1" | cut -c65- | sed 's/^[[:space:]]*//; s/^\*//'
@@ -1804,6 +1850,14 @@ update_lists_for() {
 
 # Загружает полный официальный список blobs NFQWS2 в /opt/etc/nfqws2/blobs.
 install_all_nfqw2_blobs() {
+    acquire_lock || return 1
+    install_all_nfqw2_blobs_locked
+    _ianb_rc=$?
+    release_operation_lock
+    return "$_ianb_rc"
+}
+
+install_all_nfqw2_blobs_locked() {
     ensure_network || return 1
     if ! is_installed nfqws2-keenetic; then
         say "${RED}Сначала установи пакет nfqws2-keenetic.${RESET}"
@@ -1824,8 +1878,8 @@ install_all_nfqw2_blobs() {
         say "${RED}Манифест blobs пуст или некорректен; ничего не устанавливаю.${RESET}"
         return 1 ;;
     esac
-    cp "$_blob_work/SHA256SUMS" "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp" || { rm -rf "$_blob_work"; return 1; }
-    mv "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp" "$ROOT_DIR/manifests/blobs-SHA256SUMS" || { rm -rf "$_blob_work"; return 1; }
+    cp "$_blob_work/SHA256SUMS" "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp.$$" || { rm -rf "$_blob_work"; return 1; }
+    mv "$ROOT_DIR/manifests/blobs-SHA256SUMS.tmp.$$" "$ROOT_DIR/manifests/blobs-SHA256SUMS" || { rm -rf "$_blob_work"; return 1; }
     _blob_i=0
     _blob_ok=0
     _blob_fail=0
@@ -1946,11 +2000,18 @@ active_strategy_label() {
 }
 
 strategy_menu() {
+    strategy_menu_session
+    _sms_rc=$?
+    rm -f "$ROOT_DIR/strategies-list.$$" "$ROOT_DIR/strategies-priority.$$" "$ROOT_DIR/strategies-other.$$" "$ROOT_DIR/strategies-display.$$"
+    return "$_sms_rc"
+}
+
+strategy_menu_session() {
     sync_strategies || { _rc=$?; [ "$_rc" -eq 130 ] && return 130; return 1; }
     _active=$(active_conf) || { say 'nfqws/nfqws2 конфиг не найден; сначала установи движок.'; return 1; }
     _conf=${_active%%|*}; _default=${_active#*|}
     case "$_conf" in */nfqws2.conf) _ver=2; _dir="$CACHE_DIR/nfqws2";; *) _ver=1; _dir="$CACHE_DIR/nfqws1";; esac
-    _list="$ROOT_DIR/strategies.list"
+    _list="$ROOT_DIR/strategies-list.$$"
     _priority="$ROOT_DIR/strategies-priority.$$"
     _others="$ROOT_DIR/strategies-other.$$"
     _display="$ROOT_DIR/strategies-display.$$"
@@ -1988,13 +2049,13 @@ XMENU_STRATEGY_ORDER
     while IFS= read -r _priority_name || [ -n "$_priority_name" ]; do
         case "$_priority_name" in ''|*/*|*..*) continue ;; esac
         [ -f "$_dir/$_priority_name" ] || continue
-        grep -Fxq "$_priority_name" "$_list" 2>/dev/null || printf '%s\n' "$_priority_name" >> "$_list"
+        grep -Fxq -- "$_priority_name" "$_list" 2>/dev/null || printf '%s\n' "$_priority_name" >> "$_list"
     done < "$_priority"
     : > "$_others"
     for _f in "$_dir"/*.conf; do
         [ -f "$_f" ] || continue
         _candidate=${_f##*/}
-        grep -Fxq "$_candidate" "$_list" 2>/dev/null || printf '%s\n' "$_candidate" >> "$_others"
+        grep -Fxq -- "$_candidate" "$_list" 2>/dev/null || printf '%s\n' "$_candidate" >> "$_others"
     done
     if [ -s "$_others" ]; then
         LC_ALL=C sort "$_others" >> "$_list"
@@ -2033,7 +2094,7 @@ XMENU_STRATEGY_ORDER
     line; _read_or_eof 'Номер стратегии: ' || { rm -f "$_display"; return 0; }; _n=$_read_value
     rm -f "$_display"
     case "$_n" in ''|0) return 0;; *[!0-9]*) say 'Неверный номер.'; return 1;; esac
-    _name=$(sed -n "${_n}p" "$_list")
+    _name=$(awk -v n="$_n" 'NR==n {print; exit}' "$_list")
     case "$_name" in
         ''|.|*/*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\\'*)
             say 'Недопустимое имя стратегии.'; return 1 ;;
@@ -2057,17 +2118,14 @@ XMENU_STRATEGY_ORDER
     else
         fetch "$_src" "$_tmp" 45 && verify_sum "$_tmp" "$_expected" || { rm -f "$_tmp"; say 'Стратегия не скачалась или SHA256 не совпала.'; return 1; }
     fi
-    _if=$(awk -F= '$1 ~ /^[[:space:]]*ISP_INTERFACE[[:space:]]*$/ {gsub(/[ \047]/, "", $2); gsub(/"/, "", $2); print $2; exit}' "$_conf")
-    if [ -n "$_if" ]; then
-        sed "s|^[[:space:]]*ISP_INTERFACE=.*|ISP_INTERFACE=\"$_if\"|" "$_tmp" > "$_tmp.norm" && mv "$_tmp.norm" "$_tmp"
-    fi
-    sed 's/\r$//' "$_tmp" > "$_tmp.norm" && mv "$_tmp.norm" "$_tmp"
-    case "$_ver" in 2) preserve_rkn_hostlist "$_conf" "$_tmp" 2 || : ;; 1) preserve_rkn_hostlist "$_conf" "$_tmp" 1 || : ;; esac
     say "Выбрана стратегия: $_name"
     say 'Будет создан бэкап; сначала проверю/доустановлю нужные blobs, затем заменю конфиг и перезапущу NFQWS.'
     if confirm 'Применить стратегию?'; then
         [ ! -L "$_conf" ] || { rm -f "$_tmp" "$_tmp.norm"; say 'Активный конфиг является симлинком; замена отменена.'; return 1; }
         acquire_lock || { rm -f "$_tmp" "$_tmp.norm"; return 1; }
+        prepare_strategy_config "$_conf" "$_tmp" && preserve_rkn_hostlist "$_conf" "$_tmp" "$_ver" || {
+            cleanup; rm -f "$_tmp" "$_tmp.norm"; return 1;
+        }
         # Сначала обеспечиваем все необходимые blobs; живой конфиг не меняется при ошибке загрузки.
         if ! update_blobs_for "$_tmp" "$_default"; then
             cleanup
@@ -2082,7 +2140,7 @@ XMENU_STRATEGY_ORDER
             return 1
         fi
         backup_file "$_conf" || { cleanup; rm -f "$_tmp" "$_tmp.norm"; return 1; }
-        cp "$_tmp" "$_conf" || { cleanup; rm -f "$_tmp" "$_tmp.norm"; say 'Не удалось применить конфиг.'; return 1; }
+        replace_shell_config "$_tmp" "$_conf" || { cleanup; rm -f "$_tmp" "$_tmp.norm"; say 'Не удалось применить конфиг.'; return 1; }
         printf '%s\n' "$_name" > "$ROOT_DIR/active-strategy-nfqws$_ver" || say 'Не удалось сохранить имя активной стратегии для автообновления.'
         case "$_ver" in 2) _init=/opt/etc/init.d/S51nfqws2;; 1) _init=/opt/etc/init.d/S51nfqws;; esac
         _strategy_apply_rc=0
@@ -2143,8 +2201,8 @@ preserve_rkn_hostlist() {
     }
     if ! mv "$_pr_tmp" "$_pr_new"; then
         rm -f "$_pr_tmp"
-        say "${YELLOW}Не удалось сохранить автоматическую привязку rkn.list; применение стратегии продолжится без неё.${RESET}"
-        return 0
+        say "${RED}Не удалось сохранить привязку rkn.list; применение стратегии отменено.${RESET}"
+        return 1
     fi
     say "${GREEN}Сохранил привязку rkn.list в MODE_LIST.${RESET}"
     return 0
@@ -2186,12 +2244,9 @@ apply_marked_active_strategy() {
     verify_sum "$_src" "$_expected" || { say "${RED}Кэш активной стратегии $_name не прошёл SHA-256; конфиг не изменён.${RESET}"; return 1; }
     _tmpconf="$ROOT_DIR/active-strategy-update.$$"
     cp "$_src" "$_tmpconf" || return 1
-    _if=$(awk -F= '$1 ~ /^[[:space:]]*ISP_INTERFACE[[:space:]]*$/ {gsub(/[ \047]/, "", $2); gsub(/"/, "", $2); print $2; exit}' "$_conf")
-    if [ -n "$_if" ]; then
-        sed "s|^[[:space:]]*ISP_INTERFACE=.*|ISP_INTERFACE=\"$_if\"|" "$_tmpconf" > "$_tmpconf.norm" && mv "$_tmpconf.norm" "$_tmpconf" || { rm -f "$_tmpconf" "$_tmpconf.norm"; return 1; }
-    fi
-    sed 's/\r$//' "$_tmpconf" > "$_tmpconf.norm" && mv "$_tmpconf.norm" "$_tmpconf" || { rm -f "$_tmpconf" "$_tmpconf.norm"; return 1; }
-    preserve_rkn_hostlist "$_conf" "$_tmpconf" "$_ver" || :
+    prepare_strategy_config "$_conf" "$_tmpconf" && preserve_rkn_hostlist "$_conf" "$_tmpconf" "$_ver" || {
+        rm -f "$_tmpconf" "$_tmpconf.norm"; return 1;
+    }
     _old_sum=$(sha256_file "$_conf") || _old_sum=''
     _new_sum=$(sha256_file "$_tmpconf") || _new_sum=''
     if [ -n "$_old_sum" ] && [ "$_old_sum" = "$_new_sum" ]; then rm -f "$_tmpconf"; return 0; fi
@@ -2207,12 +2262,13 @@ apply_marked_active_strategy() {
         return 1
     fi
     backup_file "$_conf" || { rm -f "$_tmpconf"; return 1; }
-    cp "$_tmpconf" "$_conf" || { rm -f "$_tmpconf"; return 1; }
+    replace_shell_config "$_tmpconf" "$_conf" || { rm -f "$_tmpconf"; return 1; }
     rm -f "$_tmpconf"
     STRATEGY_CHANGED=1
     say "${GREEN}Активная стратегия $_name обновлена из проверенного кэша; ISP_INTERFACE сохранён.${RESET}"
 }
 sync_active_blobs() {
+    acquire_lock || return 1
     # Decide whether the live config is an official selected strategy BEFORE the cache is refreshed.
     # If it differs, it is custom and the config must not be replaced by a menu strategy.
     SYNC_ALLOW_STRATEGY_UPDATE=0
@@ -2234,7 +2290,6 @@ sync_active_blobs() {
             fi
         fi
     fi
-    acquire_lock || return 1
     sync_strategies || { _rc=$?; cleanup; [ "$_rc" -eq 130 ] && return 130; return 1; }
     apply_marked_active_strategy || { _rc=$?; cleanup; [ "$_rc" -eq 130 ] && return 130; return 1; }
     _active=$(active_conf) || { cleanup; say 'Нет активного NFQWS конфига.'; return 1; }
