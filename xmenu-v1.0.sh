@@ -664,7 +664,7 @@ backup_configs() {
     _ts=$(date '+%Y%m%d-%H%M%S' 2>/dev/null); [ -n "$_ts" ] || _ts="backup-$$"
     set --
     for _p in /opt/etc/nfqws/nfqws.conf /opt/etc/nfqws2/nfqws2.conf /opt/etc/nfqws2/blobs/*.bin /opt/etc/nfqws2/*.bin /opt/etc/nfqws/*.bin /opt/etc/xkeen; do
-        [ -e "$_p" ] && [ ! -L "$_p" ] && set -- "$@" "$_p"
+        [ -e "$_p" ] && [ ! -L "$_p" ] && set -- "$@" "${_p#/}"
     done
     [ "$#" -gt 0 ] || { say 'Конфигурации для бэкапа не найдены.'; return 0; }
     _archive_base="$BACKUP_DIR/configs-$_ts"
@@ -681,10 +681,10 @@ backup_configs() {
         _archive_seq=$((_archive_seq + 1))
     done
     if [ "$_archive_ext" = '.tar.gz' ]; then
-        tar -czf "$_archive" "$@"
+        tar -czf "$_archive" -C / "$@"
     else
         say "${YELLOW}gzip не найден; создаю несжатый tar-архив.${RESET}"
-        tar -cf "$_archive" "$@"
+        tar -cf "$_archive" -C / "$@"
     fi
     _tar_rc=$?
     if [ "$_tar_rc" -ne 0 ] || [ ! -s "$_archive" ]; then
