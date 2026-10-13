@@ -4023,7 +4023,7 @@ opkg_settings_menu() {
             say "${BRIGHT_CYAN}OPKG / Entware repositories:${RESET}"
             xmenu_opkg_show_active_repository en
             line
-            menu_item 1 'Auto-select available Entware repository - checks and selects an available mirror automatically'
+            menu_item 1 'Auto-select Entware mirror - check and choose an available source'
             menu_item 2 'Check Entware mirror availability'
             menu_item 3 'Choose Entware mirror manually - Region, URL and current selection.'
             menu_item 4 'Restore latest opkg.conf backup'
@@ -4034,7 +4034,7 @@ opkg_settings_menu() {
             say "${BRIGHT_CYAN}Репозитории OPKG / Entware:${RESET}"
             xmenu_opkg_show_active_repository ru
             line
-            menu_item 1 'Авто-выбор доступного репозитория Entware - проверит и выберет автоматически доступное зеркало'
+            menu_item 1 'Авто-выбор Entware — проверит и выберет доступное зеркало'
             menu_item 2 'Проверить доступность зеркал Entware'
             menu_item 3 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.'
             menu_item 4 'Восстановить копию opkg.conf'

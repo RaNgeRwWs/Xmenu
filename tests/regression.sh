@@ -102,14 +102,16 @@ grep -q '^src/gz custom https://custom.test/feed$' "$test_dir/opkg.conf" || fail
 test "$(xmenu_opkg_feed_path)" = '/aarch64-k3.10' || fail 'trailing slash feed parsing'
 
 # Проверяем новый список и маршрутизацию пунктов 4/5.
-terminal_width() { printf 100; }
+terminal_width() { printf 80; }
 _read_or_eof() { _read_value=0; return 0; }
 BRIGHT_CYAN=$(printf '\033[1;38;5;51m')
 opkg_settings_menu > "$test_dir/menu.txt"
+LC_ALL=C awk '/Авто-выбор Entware/ {if ($0 !~ /зеркало$/) exit 1; found=1} END {if (!found) exit 1}' "$test_dir/menu.txt" || fail 'auto-select Entware explanation wrapped to another line'
 grep -q 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.' "$test_dir/menu.txt" || fail 'manual menu label split'
 grep -Fq "${BRIGHT_CYAN}Репозитории OPKG / Entware:" "$test_dir/menu.txt" || fail 'OPKG title not highlighted'
 grep -q 'Текущий:.*Working' "$test_dir/menu.txt" || fail 'active repository missing'
 if grep -q 'Создать копию текущего\|6\.' "$test_dir/menu.txt"; then fail 'removed menu item still present'; fi
+terminal_width() { printf 100; }
 test_option=4
 _read_or_eof() { _read_value=$test_option; test_option=0; return 0; }
 xmenu_opkg_restore_config() { printf 'restore\n' > "$test_dir/dispatched"; }
