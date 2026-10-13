@@ -2752,20 +2752,13 @@ render_component_statuses() {
 
     if [ -f "$XMENU_COMPONENT_CACHE" ]; then
         render_component_status_table "$XMENU_COMPONENT_CACHE"
-        if [ "$(get_ui_lang)" = en ]; then
-            say "  ${YELLOW}Refreshing component details in the background...${RESET}"
-        else
-            say "  ${YELLOW}Обновляю сведения о компонентах в фоне...${RESET}"
-        fi
     else
         if [ "$(get_ui_lang)" = en ]; then
             say "${PURPLE}Installed components:${RESET}"
             component_table_header
-            say "  ${YELLOW}Collecting component details in the background...${RESET}"
         else
             say "${PURPLE}Установленные компоненты:${RESET}"
             component_table_header
-            say "  ${YELLOW}Собираю сведения о компонентах в фоне...${RESET}"
         fi
     fi
     return 0

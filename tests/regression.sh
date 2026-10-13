@@ -145,7 +145,6 @@ render_component_statuses() {
         say "  component-$layout_component 1.0"
         layout_component=$((layout_component + 1))
     done
-    say '  Обновляю сведения о компонентах в фоне...'
 }
 render_menu > "$test_dir/main-menu.txt"
 test "$(wc -l < "$test_dir/main-menu.txt")" -le 54 || fail 'menu still exceeds screenshot height'
