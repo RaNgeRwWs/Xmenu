@@ -3375,6 +3375,8 @@ xmenu_read_menu_prompt() {
             printf '\n'
             xmenu_show_pending_update_notice
             printf '%b' "${_xrmp_prompt}"
+            # SIGUSR1 can make ash return status 1 from read; do not treat it as EOF.
+            [ "${_xrmp_rc}" -eq 0 ] || continue
         fi
         if [ "${INTERRUPTED:-0}" = 1 ]; then return 1; fi
         if ! has_controlling_tty; then return 1; fi
@@ -3387,7 +3389,10 @@ xmenu_read_menu_prompt() {
                     ;;
                 *)
                     _xrmp_elapsed=$((_xrmp_after_ticks - _xrmp_before_ticks))
-                    [ "${_xrmp_elapsed}" -ge 5 ] || return 1
+                    if [ "${_xrmp_elapsed}" -lt 5 ]; then
+                        [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ] && continue
+                        return 1
+                    fi
                     ;;
             esac
         fi
@@ -3914,6 +3919,12 @@ xmenu_opkg_check_selected_mirror() {
     fi
 }
 
+xmenu_opkg_backup_config() {
+    _obc_conf=/opt/etc/opkg.conf
+    [ -r "$_obc_conf" ] || { say "Не найден $_obc_conf."; return 1; }
+    backup_file "$_obc_conf"
+}
+
 xmenu_opkg_restore_config() {
     _orc_conf=/opt/etc/opkg.conf
     _orc_latest=$(ls -1t "$BACKUP_DIR"/opkg.conf.*.bak 2>/dev/null | sed -n '1p')
@@ -3980,37 +3991,42 @@ opkg_settings_menu() {
         line
         if [ "$_osm_lang" = en ]; then
             say "${WHITE}OPKG / Entware repositories${RESET}"
-            say 'Choose how to select the package repository.'
-            menu_item 1 'Auto-select the fastest available Entware repository'
-            say '    Tests mirrors and switches to the fastest responding one.'
-            menu_item 2 'Choose an Entware repository manually'
-            say '    View status, region and URL; test or switch a mirror.'
-            menu_item 3 'Run opkg update now'
-            menu_item 4 'Restore latest opkg.conf backup'
+            say 'Select or check an Entware repository.'
+            menu_item 1 'Auto-select available Entware repository'
+            say '    Checks package indexes and chooses the fastest.'
+            menu_item 2 'Check Entware mirror availability'
+            menu_item 3 'Choose Entware mirror manually'
+            say '    View the status, region and URL of each mirror.'
+            menu_item 4 'Back up current opkg.conf'
+            menu_item 5 'Run opkg update'
+            menu_item 6 'Restore latest opkg.conf backup'
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
         else
             say "${WHITE}Репозитории OPKG / Entware${RESET}"
-            say 'Выбери способ настройки репозитория пакетов.'
-            menu_item 1 'Авто-выбор доступного репозитория Entware/OPKG'
-            say '    Проверит зеркала и выберет самое быстрое из доступных.'
-            menu_item 2 'Ручной выбор репозитория'
-            say '    Покажет статус, регион и URL; позволит проверить или сменить зеркало.'
-            menu_item 3 'Запустить opkg update'
-            menu_item 4 'Восстановить резервную копию opkg.conf'
+            say 'Выбери действие с репозиториями Entware.'
+            menu_item 1 'Авто-выбор доступного репозитория Entware'
+            say '    Проверит индекс пакетов и выберет быстрое зеркало.'
+            menu_item 2 'Проверить доступность зеркал Entware'
+            menu_item 3 'Выбрать зеркало Entware вручную'
+            say '    Статус, регион и адрес каждого зеркала.'
+            menu_item 4 'Создать копию текущего opkg.conf'
+            menu_item 5 'Выполнить opkg update'
+            menu_item 6 'Восстановить копию opkg.conf'
             menu_item 0 'Назад'
             _osm_prompt='[?] Выбери пункт: '
         fi
         _read_or_eof "$_osm_prompt" || return 0
         case "$_read_value" in
             1) xmenu_opkg_auto_select_mirror; pause ;;
-            2) xmenu_opkg_manual_mirror_menu ;;
-            3)
-                say 'opkg update обновляет индексы репозитория, это не обновление установленных пакетов.'
-                say 'Если загрузка снова зависнет, нажми Ctrl+C. Зеркало останется выбранным.'
+            2) xmenu_opkg_check_mirrors 1; pause ;;
+            3) xmenu_opkg_manual_mirror_menu ;;
+            4) xmenu_opkg_backup_config; pause ;;
+            5)
+                say 'opkg update обновляет индексы репозитория, но не установленные пакеты.'
                 confirm 'Выполнить opkg update?' && opkg update
                 pause ;;
-            4) xmenu_opkg_restore_config; pause ;;
+            6) xmenu_opkg_restore_config; pause ;;
             0|'') return 0 ;;
             *) say 'Неверный пункт.'; sleep 1 ;;
         esac
@@ -4770,15 +4786,6 @@ main() {
                [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ]; then
                 rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
             fi
-            case "$_xcrc_parent" in
-                ''|*[!0-9]*) : ;;
-                *)
-                    if [ -r "/proc/$_xcrc_parent/cmdline" ] &&
-                       tr -d '\000' < "/proc/$_xcrc_parent/cmdline" 2>/dev/null | grep -qi 'xmenu'; then
-                        kill -USR1 "$_xcrc_parent" 2>/dev/null || :
-                    fi
-                    ;;
-            esac
             return "$_xcrc_rc" ;;
         sync|update-strategies)
             ensure_network || return 1
