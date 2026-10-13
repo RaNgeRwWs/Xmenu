@@ -3712,7 +3712,15 @@ xmenu_opkg_active_mirror_url() {
     return 1
 }
 
-# Ответ: доступно|задержка-мс|HTTP-код. В режиме auto выполняем одну повторную
+# Проверяем начало настоящего gzip-индекса, а не только ответ хоста: перехватчики сети
+# часто возвращают страницу блокировки с HTTP 200.
+xmenu_opkg_is_packages_index() {
+    [ -s "$1" ] || return 1
+    _opmi_magic=$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d '[:space:]')
+    [ "$_opmi_magic" = 1f8b ]
+}
+
+# Ответ: доступно|задержка-мс|HTTP-код или причина. В режиме auto выполняем одну повторную
 # попытку; в интерактивном списке проверяем один раз, чтобы не задерживать UI.
 xmenu_opkg_probe_mirror() {
     _opm_base=${1%/}
@@ -3726,29 +3734,38 @@ xmenu_opkg_probe_mirror() {
     _opm_wget=$(command -v wget 2>/dev/null || printf '')
     while [ "$_opm_attempt" -lt "$_opm_attempts" ]; do
         _opm_attempt=$((_opm_attempt + 1))
+        _opm_tmp="/tmp/xmenu-mirror-probe-$$"
+        rm -f "$_opm_tmp"
         if [ -n "$_opm_curl" ] && [ -x "$_opm_curl" ]; then
-            _opm_result=$("$_opm_curl" -L -sS --connect-timeout 2 --max-time 4 --range 0-0 -o /dev/null -w '%{http_code}|%{time_total}' "$_opm_url" 2>/dev/null || :)
+            _opm_result=$("$_opm_curl" -L -sS --connect-timeout 3 --max-time 8 --range 0-1 -o "$_opm_tmp" -w '%{http_code}|%{time_total}' "$_opm_url" 2>/dev/null)
+            _opm_rc=$?
             _opm_code=${_opm_result%%|*}
             _opm_seconds=${_opm_result#*|}
             case "$_opm_code" in
                 2??)
-                    case "$_opm_seconds" in ''|*[!0-9.]*|*.*.*) _opm_ms=999999 ;;
-                    *) _opm_ms=$(awk -v t="$_opm_seconds" 'BEGIN {printf "%d", t * 1000}') ;;
-                    esac
-                    printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
-                    return 0
+                    if [ "$_opm_rc" -eq 0 ] && xmenu_opkg_is_packages_index "$_opm_tmp"; then
+                        case "$_opm_seconds" in ''|*[!0-9.]*|*.*.*) _opm_ms=999999 ;;
+                        *) _opm_ms=$(awk -v t="$_opm_seconds" 'BEGIN {printf "%d", t * 1000}') ;;
+                        esac
+                        rm -f "$_opm_tmp"
+                        printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
+                        return 0
+                    fi
+                    _opm_code="blocked-http-$_opm_code"
                     ;;
             esac
         elif [ -n "$_opm_wget" ] && [ -x "$_opm_wget" ]; then
-            if "$_opm_wget" -q -T 4 -O /dev/null "$_opm_url"; then
+            if "$_opm_wget" -q -T 8 -O "$_opm_tmp" --header='Range: bytes=0-1' "$_opm_url" 2>/dev/null && xmenu_opkg_is_packages_index "$_opm_tmp"; then
+                rm -f "$_opm_tmp"
                 printf 'available|999999|200'
                 return 0
             fi
-            _opm_code='000'
+            _opm_code='blocked-or-invalid-index'
         else
             printf 'unavailable||no-transport'
             return 0
         fi
+        rm -f "$_opm_tmp"
         [ "$_opm_attempt" -lt "$_opm_attempts" ] && sleep 1
     done
     printf 'unavailable||%s' "${_opm_code:-000}"
@@ -3797,11 +3814,11 @@ xmenu_opkg_check_mirrors() {
     line
     if [ "$_ocm_lang" = en ]; then
         say "${WHITE}◆ ENTWARE REPOSITORIES${RESET}"
-        say 'Status is checked against the Packages.gz index.'
+        say 'The Packages.gz content is verified; blocking pages count as unavailable.'
         [ -n "$_ocm_active" ] && say "Current repository: ${CYAN}$_ocm_active${RESET}"
     else
         say "${WHITE}◆ РЕПОЗИТОРИИ ENTWARE / OPKG${RESET}"
-        say 'Проверяется индекс пакетов Packages.gz.'
+        say 'Проверяется содержимое Packages.gz; страницы блокировки считаются недоступностью.'
         [ -n "$_ocm_active" ] && say "Текущий репозиторий: ${CYAN}$_ocm_active${RESET}"
     fi
     line
