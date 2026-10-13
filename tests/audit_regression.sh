@@ -5,7 +5,7 @@ audit_dir=$(mktemp -d)
 audit_path=$PATH
 source_file=$(cd "$(dirname "$0")/.." && pwd)/xmenu-v1.0.sh
 sed '/^main "\$@"$/d' "$source_file" |
-    sed "s#/opt/etc/nfqws2#$audit_dir/nfqws2#g; s#/opt/etc/nfqws/#$audit_dir/nfqws/#g; s#/opt/etc/opkg.conf#$audit_dir/opkg.conf#g" > "$audit_dir/library.sh"
+    sed "s#/opt/etc/nfqws2#$audit_dir/nfqws2#g; s#/opt/etc/nfqws/#$audit_dir/nfqws/#g; s#/opt/etc/opkg.conf#$audit_dir/opkg.conf#g; s#/opt/etc/.opkg.conf#$audit_dir/.opkg.conf#g" > "$audit_dir/library.sh"
 # shellcheck disable=SC1090
 . "$audit_dir/library.sh"
 PATH=$audit_path
@@ -184,6 +184,67 @@ EOF
     for archive in "$audit_dir/parallel/backups"/*; do
         test "$(stat -c '%Y' "$archive")" -gt 946684800 || fail 'backup still has old source timestamp'
     done
+)
+
+(
+    XMENU_OPKG_MIRRORS_FILE="$audit_dir/mirrors.conf"
+    printf '1|Alias|https://mirror.test/unused|Region\n2|Mirror|https://mirror.test/entware|Region\n3|Other|https://other.test|Region\n' > "$XMENU_OPKG_MIRRORS_FILE"
+    printf 'src/gz entware https://mirror.test/entware/aarch64-k3.10/\nsrc/gz vendor https://vendor.test/feed\n' > "$audit_dir/opkg.conf"
+    test "$(xmenu_opkg_feed_path)" = /aarch64-k3.10/ || fail 'same-host mirror alias hid feed path'
+    printf 'Package: test\nVersion: 1.0\n\n' | gzip -c > "$audit_dir/packages.gz"
+    XMENU_TEST_PACKAGES="$audit_dir/packages.gz"
+    export XMENU_TEST_PACKAGES
+    cat > "$audit_dir/bin/curl" <<'EOF'
+#!/bin/sh
+out=''
+while [ "$#" -gt 0 ]; do
+    case "$1" in -o) out=$2; shift 2 ;; *) url=$1; shift ;; esac
+done
+if [ "$url" = https://mirror.test/entware/aarch64-k3.10/Packages.gz ]; then
+    cp "$XMENU_TEST_PACKAGES" "$out"; printf '200|0.020'
+else printf '404|0.001'; exit 22; fi
+EOF
+    printf '#!/bin/sh\nexit 1\n' > "$audit_dir/bin/wget"
+    chmod +x "$audit_dir/bin/curl" "$audit_dir/bin/wget"
+    PATH="$audit_dir/bin:$audit_path"
+    export PATH
+    case "$(xmenu_opkg_probe_mirror https://mirror.test/entware /aarch64-k3.10/)" in
+        available\|*) : ;; *) fail 'trailing feed slash caused false mirror failure' ;;
+    esac
+    xmenu_opkg_set_mirror https://other.test >/dev/null || fail 'same-host alias prevented mirror switch'
+    grep -q '^src/gz entware https://other.test/aarch64-k3.10/$' "$audit_dir/opkg.conf" || fail 'wrong rewritten mirror path'
+    grep -q '^src/gz vendor https://vendor.test/feed$' "$audit_dir/opkg.conf" || fail 'third-party feed changed'
+)
+
+(
+    # Пустой lock ещё публикуется другой сессией: нельзя сразу считать его старым.
+    mkdir "$XMENU_COMPONENT_REFRESH_LOCK"
+    (sleep 0.1; printf '%s\n' "$$" > "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid") &
+    publisher=$!
+    component_refresh_is_running || fail 'component lock removed while its owner was publishing PID'
+    wait "$publisher"
+    start_component_status_refresh || fail 'shared refresh subscription failed'
+    test "$XMENU_COMPONENT_REFRESH_PENDING" = 1 || fail 'second session did not subscribe to component cache'
+    rm -rf "$XMENU_COMPONENT_REFRESH_LOCK"
+    XMENU_UPDATE_LOCK="$ROOT_DIR/update.lock"
+    mkdir "$XMENU_UPDATE_LOCK"
+    (sleep 0.1; printf '%s\n' "$$" > "$XMENU_UPDATE_LOCK/menu_pid") &
+    publisher=$!
+    xmenu_update_cache_is_fresh() { return 1; }
+    xmenu_update_check_worker() { : > "$audit_dir/duplicate-worker"; }
+    xmenu_start_update_check || fail 'shared update subscription failed'
+    wait "$publisher"
+    test ! -e "$audit_dir/duplicate-worker" || fail 'second update worker launched during lock publication'
+    test "$XMENU_UPDATE_CHECK_PENDING" = 1 || fail 'second session did not subscribe to update cache'
+    rm -rf "$XMENU_UPDATE_LOCK"
+    configure_locale() { return 0; }
+    require_root() { return 0; }
+    migrate_legacy_xmenu_data() { return 0; }
+    install_xmenu_command() { fail 'status worker tried to overwrite installed Xmenu'; }
+    require_opkg() { return 0; }
+    ensure_dirs() { return 0; }
+    render_component_statuses_sync() { return 0; }
+    main __refresh-component-cache '' || fail 'internal status worker failed'
 )
 
 printf 'PASS: deep audit regression scenarios\n'

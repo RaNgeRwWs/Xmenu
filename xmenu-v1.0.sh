@@ -29,6 +29,7 @@ _FETCH_FAIL_COUNT=0
 XMENU_UPDATE_REDRAW=0
 XMENU_UPDATE_NOTICE_VISIBLE=0
 XMENU_UPDATE_CHECK_PID=''
+XMENU_UPDATE_CHECK_PENDING=0
 XMENU_MANUAL_UPDATE_CHECK=0
 XMENU_UPDATE_CACHE="$ROOT_DIR/xmenu-update.cache"
 XMENU_UPDATE_LOCK="$ROOT_DIR/.xmenu-update-check.lock"
@@ -43,8 +44,13 @@ stop_component_status_refresh() {
     [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] || return 0
     _scsr_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
     case "$_scsr_worker" in
-        ''|*[!0-9]*) : ;;
-        *) [ "$_scsr_worker" = "$$" ] || kill "$_scsr_worker" 2>/dev/null || : ;;
+        ''|*[!0-9]*|0) : ;;
+        *)
+            _scsr_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_start" 2>/dev/null || :)
+            if [ "$_scsr_worker" != "$$" ] && xmenu_lock_pid_is_owner "$_scsr_worker" "$_scsr_start"; then
+                kill "$_scsr_worker" 2>/dev/null || :
+                wait "$_scsr_worker" 2>/dev/null || :
+            fi ;;
     esac
     rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
     return 0
@@ -2782,10 +2788,19 @@ component_refresh_is_running() {
     [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 1
     _crir_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
     _crir_worker_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_start" 2>/dev/null || :)
+    _crir_owner=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)
+    _crir_owner_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_start" 2>/dev/null || :)
+    # Между mkdir и публикацией PID другая SSH-сессия видит пустую директорию.
+    if [ -z "$_crir_worker" ] && [ -z "$_crir_owner" ]; then
+        sleep 1
+        [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 1
+        _crir_worker=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_pid" 2>/dev/null || :)
+        _crir_worker_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_start" 2>/dev/null || :)
+        _crir_owner=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)
+        _crir_owner_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_start" 2>/dev/null || :)
+    fi
     case "$_crir_worker" in
         ''|*[!0-9]*)
-            _crir_owner=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)
-            _crir_owner_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_start" 2>/dev/null || :)
             xmenu_lock_pid_is_owner "$_crir_owner" "$_crir_owner_start" && return 0
             ;;
         *)
@@ -2798,6 +2813,8 @@ component_refresh_is_running() {
 
 start_component_status_refresh() {
     mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
+    # Ждём готовый общий кеш также в сессии, которая не запускала worker.
+    XMENU_COMPONENT_REFRESH_PENDING=1
     component_refresh_is_running && return 0
     if ! mkdir "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null; then
         component_refresh_is_running && return 0
@@ -2845,11 +2862,13 @@ render_component_statuses() {
     fi
 
     if component_status_cache_fresh; then
+        XMENU_COMPONENT_REFRESH_PENDING=0
         render_component_status_table "$XMENU_COMPONENT_CACHE"
         return $?
     fi
 
     if ! start_component_status_refresh; then
+        XMENU_COMPONENT_REFRESH_PENDING=0
         XMENU_FORCE_COMPONENT_REFRESH=1
         render_component_statuses_sync
         _rcs_rc=$?
@@ -3274,6 +3293,7 @@ xmenu_remote_version_probe() {
 # and an automatic SIGUSR1 during the manual result used to trigger an extra redraw.
 xmenu_stop_update_check() {
     XMENU_MANUAL_UPDATE_CHECK=1
+    XMENU_UPDATE_CHECK_PENDING=0
     if [ -n "${XMENU_UPDATE_CHECK_PID:-}" ] && [ -d "$XMENU_UPDATE_LOCK" ] &&
        [ "$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] &&
        [ "$(cat "$XMENU_UPDATE_LOCK/check_pid" 2>/dev/null || :)" = "$XMENU_UPDATE_CHECK_PID" ]; then
@@ -3379,8 +3399,13 @@ xmenu_start_update_check() {
     # Successful results are cached for 10 minutes; failures only for 60 seconds.
     xmenu_update_cache_is_fresh && return 0
     mkdir -p "$ROOT_DIR" 2>/dev/null || return 1
+    XMENU_UPDATE_CHECK_PENDING=1
     if ! mkdir "$XMENU_UPDATE_LOCK" 2>/dev/null; then
         _xsc_stale_pid=$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)
+        if [ -z "$_xsc_stale_pid" ]; then
+            sleep 1
+            _xsc_stale_pid=$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)
+        fi
         _xsc_stale_start=$(cat "$XMENU_UPDATE_LOCK/menu_start" 2>/dev/null || :)
         case "$_xsc_stale_pid" in ''|*[!0-9]*) _xsc_stale_pid='' ;; esac
         if ! xmenu_lock_pid_is_owner "$_xsc_stale_pid" "$_xsc_stale_start"; then
@@ -3407,6 +3432,15 @@ xmenu_read_menu_prompt() {
         return $?
     fi
     while :; do
+        # SIGUSR1 получает владелец общей проверки. Остальные SSH-сессии
+        # замечают готовый кеш на очередном тайм-ауте чтения.
+        if [ "${XMENU_COMPONENT_REFRESH_PENDING:-0}" = 1 ] && component_status_cache_fresh; then
+            XMENU_UPDATE_REDRAW=1
+        fi
+        if [ "${XMENU_UPDATE_CHECK_PENDING:-0}" = 1 ] && xmenu_update_cache_is_fresh; then
+            XMENU_UPDATE_CHECK_PENDING=0
+            XMENU_UPDATE_REDRAW=1
+        fi
         if [ "${XMENU_UPDATE_REDRAW:-0}" = 1 ]; then
             XMENU_UPDATE_REDRAW=0
             if xmenu_redraw_pending_update; then printf '%b' "${_xrmp_prompt}"; fi
@@ -3663,7 +3697,7 @@ xmenu_opkg_feed_path() {
             case "$_ofp_path" in
                 "$_ofp_prefix"/*) _ofp_path=${_ofp_path#"$_ofp_prefix"} ;;
                 "$_ofp_prefix") _ofp_path='/' ;;
-                *) return 1 ;;
+                *) continue ;;
             esac
         fi
         [ -n "$_ofp_path" ] || _ofp_path='/'
@@ -3707,7 +3741,7 @@ xmenu_opkg_set_mirror_locked() {
                 if (prefix != "" && prefix != "/") {
                     if (path == prefix) path="/"
                     else if (index(path, prefix "/") == 1) path=substr(path, length(prefix)+1)
-                    else return ""
+                    else continue
                 }
                 if (path == "") path="/"
                 suffix=path
@@ -3813,11 +3847,13 @@ xmenu_opkg_probe_mirror() {
     command -v gzip >/dev/null 2>&1 || { printf 'unavailable||no-gzip'; return 0; }
     _opm_base=${1%/}
     _opm_feed=${2#/}
+    while [ "${_opm_feed%/}" != "$_opm_feed" ]; do _opm_feed=${_opm_feed%/}; done
     _opm_attempts=${3:-1}
     if [ -n "$_opm_feed" ]; then _opm_url="$_opm_base/$_opm_feed/Packages.gz"
     else _opm_url="$_opm_base/Packages.gz"; fi
     _opm_attempt=0
     _opm_result=''
+    _opm_code=''
     _opm_curl=$(command -v curl 2>/dev/null || printf '')
     _opm_wget=$(command -v wget 2>/dev/null || printf '')
     while [ "$_opm_attempt" -lt "$_opm_attempts" ]; do
@@ -4879,7 +4915,8 @@ main() {
     configure_locale
     require_root || return 1
     migrate_legacy_xmenu_data || { say "Не удалось перенести данные Xmenu в $ROOT_DIR. Старые файлы сохранены."; return 1; }
-    install_xmenu_command || :
+    # Фоновое чтение статусов не должно переустанавливать /opt/bin/xmenu.
+    case "${1:-menu}" in __refresh-component-cache) : ;; *) install_xmenu_command || : ;; esac
     if [ "${1:-menu}" = update-xmenu ]; then
         update_xmenu_script
         return $?

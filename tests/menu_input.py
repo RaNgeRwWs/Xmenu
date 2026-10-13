@@ -13,13 +13,14 @@ import time
 source = Path(__file__).resolve().parents[1] / "xmenu-v1.0.sh"
 
 
-def check_input(payload, expected, interrupt=False, delay=0, pending=False):
+def check_input(payload, expected, interrupt=False, delay=0, pending=False, shared=None, prefix=b""):
     with tempfile.TemporaryDirectory() as directory:
         library = Path(directory) / "library.sh"
         library.write_text(source.read_text().replace('\nmain "$@"\n', '\n'), encoding="utf-8")
         harness = Path(directory) / "prompt.sh"
         version_file = Path(directory) / "version"
         version_file.write_text("1.4.0")
+        ready_file = Path(directory) / "ready"
         setup = 'xmenu_show_pending_update_notice() { :; }\n'
         if pending:
             setup = (
@@ -27,6 +28,17 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
                 'render_menu() { printf "\\033[2J\\033[HU. Check updates\\n"; '
                 'XMENU_UPDATE_NOTICE_VISIBLE=0; xmenu_show_pending_update_notice; }\n'
                 'render_menu\n'
+            )
+        if shared == "components":
+            setup += (
+                'XMENU_COMPONENT_REFRESH_PENDING=1\n'
+                f'component_status_cache_fresh() {{ test -f "{ready_file}"; }}\n'
+                'render_menu() { printf "COMPONENTS-READY\\n"; XMENU_COMPONENT_REFRESH_PENDING=0; }\n'
+            )
+        elif shared == "update":
+            setup += (
+                'XMENU_UPDATE_CHECK_PENDING=1\n'
+                f'xmenu_update_cache_is_fresh() {{ test -f "{ready_file}"; }}\n'
             )
         harness.write_text(
             f'. "{library}"\ntrap - 0\n' + setup +
@@ -60,6 +72,14 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
 
         try:
             collect_until(b"PROMPT> ")
+            if shared:
+                version_file.write_text("1.4.1")
+                ready_file.write_text("ready")
+                collect_until(b"COMPONENTS-READY" if shared == "components" else "↑".encode())
+                assert process.poll() is None, "shared cache update closed menu"
+            if prefix:
+                os.write(master, prefix)
+                time.sleep(1.3)
             if interrupt:
                 time.sleep(0.2)
                 if pending:
@@ -87,6 +107,9 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False):
 check_input(b"23\n", b"RESULT=0 CHOICE=23", interrupt=True)
 check_input(b"23\n", b"RESULT=0 CHOICE=23", interrupt=True, pending=True)
 check_input(b"23\n", b"RESULT=0 CHOICE=23", delay=1.3)
+check_input(b"3\n", b"RESULT=0 CHOICE=23", prefix=b"2")
+check_input(b"23\n", b"RESULT=0 CHOICE=23", shared="components")
+check_input(b"23\n", b"RESULT=0 CHOICE=23", pending=True, shared="update")
 check_input(b"\n", b"RESULT=0 CHOICE=")
 check_input(b"\x04", b"RESULT=1 CHOICE=")
 print("PASS: BusyBox PTY signal, timeout, Enter and EOF")
