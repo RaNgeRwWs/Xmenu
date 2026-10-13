@@ -198,7 +198,7 @@ check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
 LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
     text=$0; sub(/^ */, "", text); gsub(/[\200-\277]/, "", text)
-    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)-6) exit 1; found=1
+    match($0, /[^ ]/); if (RSTART-1 != int((100-length(text))/2)-12) exit 1; found=1
 } END {if (!found) exit 1}' "$test_dir/plain-menu.txt" || fail 'title not centered in frame'
 
 # Открытие двух меню не должно удерживать общий lock сессии.
