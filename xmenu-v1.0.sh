@@ -4219,23 +4219,28 @@ render_menu() {
         menu_item 4  'nfqws2'
         menu_item 5  'nfqws-web-keenetic'
         menu_item 6  'nfqws2-ui'
+        say ""
         say "${PURPLE}[::]  Manual installation profiles:${RESET}"
         menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen at startup)'
         menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen at startup)'
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        say ""
         say "${PURPLE}[::]  Strategies / blobs / lists:${RESET}"
         menu_item 11 'Select and apply nfqws strategy'
         menu_item 12 'Download/check blobs and lists for active strategy from the list'
         menu_item 13 'Install all nfqws2 blobs'
         menu_item 14 'Download rkn.list (nfqws2 / nfqws) — 125k+ domains'
+        say ""
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
         menu_item 15 'DPI Detector (DNS/16 KB)'
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (install / launch)'
         menu_item 18 'awg-manager'
+        say ""
         say "${PURPLE}[::]  Interface / language:${RESET}"
         menu_item 19 'Change language: RU / EN'
+        say ""
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
         menu_item 20 'Remove components'
         menu_item 21 'Remove Xmenu'
@@ -4252,23 +4257,28 @@ render_menu() {
         menu_item 4  'nfqws2'
         menu_item 5  'nfqws-web-keenetic'
         menu_item 6  'nfqws2-ui'
+        say ""
         say "${PURPLE}[::]  Ручные настройки установки:${RESET}"
         menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen в автозагрузке)'
         menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen в автозагрузке)'
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        say ""
         say "${PURPLE}[::]  Стратегии / blobs / lists:${RESET}"
         menu_item 11 'Выбрать и применить стратегию nfqws'
         menu_item 12 'Скачать/проверить blobs и lists активной стратегии из списка'
         menu_item 13 'Установить все blobs nfqws2'
         menu_item 14 'Скачать rkn.list (nfqws2 / nfqws) — 125k+ доменов'
+        say ""
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
         menu_item 15 'DPI Detector (DNS/16kb)'
         menu_item 16 'TG WS Proxy Rust'
         menu_item 17 'KeenKit (установка / запуск)'
         menu_item 18 'awg-manager'
+        say ""
         say "${PURPLE}[::]  Интерфейс и язык:${RESET}"
         menu_item 19 'Сменить язык: RU / EN'
+        say ""
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
         menu_item 20 'Удаление компонентов'
         menu_item 21 'Удалить Xmenu'
