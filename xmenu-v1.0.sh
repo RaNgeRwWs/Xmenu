@@ -3,7 +3,7 @@
 APP_VERSION="1.3.2"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
-ROOT_DIR="/opt/etc/xkeen-menu"
+ROOT_DIR="/opt/etc/xmenu"
 BACKUP_DIR="$ROOT_DIR/backups"
 CACHE_DIR="/opt/etc/nfqws-menu/strategies"
 LANG_FILE="$ROOT_DIR/language"
@@ -21,7 +21,7 @@ PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/local/sbin:/usr/local/b
 export PATH
 
 WORK=""
-LOCK_DIR="/opt/var/lock/xkeen-menu.lock"
+LOCK_DIR="/opt/var/lock/xmenu-operation.lock"
 LOCK_HELD=0
 MENU_SESSION_LOCK_DIR="/opt/var/lock/xmenu-session.lock"
 MENU_SESSION_LOCK_HELD=0
@@ -436,8 +436,26 @@ install_transport() {
     transport_has_tls || { say "${RED}После установки не удалось подтвердить поддержку HTTPS у curl/wget. Проверь DNS и доступ к raw.githubusercontent.com.${RESET}"; return 1; }
     return 0
 }
+migrate_legacy_xmenu_data() {
+    _mld_old='/opt/etc/xkeen-menu'
+    [ -d "$_mld_old" ] || return 0
+    mkdir -p "$ROOT_DIR" || return 1
+    _mld_list="/tmp/xmenu-migrate-$$"
+    find "$_mld_old" -type f -print > "$_mld_list" 2>/dev/null || { rm -f "$_mld_list"; return 1; }
+    _mld_failed=0
+    while IFS= read -r _mld_file || [ -n "$_mld_file" ]; do
+        [ -n "$_mld_file" ] || continue
+        _mld_relative=${_mld_file#"$_mld_old"/}
+        _mld_target="$ROOT_DIR/$_mld_relative"
+        if [ -e "$_mld_target" ] || [ -L "$_mld_target" ]; then continue; fi
+        mkdir -p "${_mld_target%/*}" || { _mld_failed=1; continue; }
+        cp -p "$_mld_file" "$_mld_target" 2>/dev/null || _mld_failed=1
+    done < "$_mld_list"
+    rm -f "$_mld_list"
+    [ "$_mld_failed" = 0 ]
+}
 ensure_dirs() {
-    mkdir -p "$ROOT_DIR" "$BACKUP_DIR" /opt/tmp /opt/share/xkeen-menu /opt/var/log || {
+    mkdir -p "$ROOT_DIR" "$BACKUP_DIR" /opt/tmp /opt/share/xmenu /opt/var/log || {
         say "${RED}Не удалось создать рабочие каталоги Xmenu.${RESET}"
         return 1
     }
@@ -4349,7 +4367,7 @@ remove_component_backups() {
     confirm_no 'Удалить резервные файлы *.bak, *.bak.* и *-opkg в каталогах конфигурации?' || { say 'Очистка отменена.'; return 1; }
     _rb_list="$ROOT_DIR/remove-backups-list.$$"
     : > "$_rb_list" || return 1
-    for _rb_dir in /opt/etc/nfqws /opt/etc/nfqws2 /opt/etc/xkeen /opt/etc/lighttpd /opt/etc/xkeen-menu/backups; do
+    for _rb_dir in /opt/etc/nfqws /opt/etc/nfqws2 /opt/etc/xkeen /opt/etc/lighttpd /opt/etc/xmenu/backups; do
         [ -d "$_rb_dir" ] || continue
         find "$_rb_dir" -type f \( -name '*.bak' -o -name '*.bak.*' -o -name '*-opkg' \) -print 2>/dev/null >> "$_rb_list"
     done
@@ -4465,9 +4483,9 @@ remove_xmenu_backups() {
         [ -n "$_rxb_file" ] && printf '  %s\n' "$_rxb_file"
     done < "$_rxb_list"
     if [ "$(get_ui_lang)" = en ]; then
-        _rxb_prompt='Delete all Xmenu backups, including saved config backups in /opt/etc/xkeen-menu/backups? The active /opt/bin/xmenu will remain.'
+        _rxb_prompt='Delete all Xmenu backups, including saved config backups in /opt/etc/xmenu/backups? The active /opt/bin/xmenu will remain.'
     else
-        _rxb_prompt='Удалить все бэкапы Xmenu, включая копии конфигураций в /opt/etc/xkeen-menu/backups? Действующий /opt/bin/xmenu останется.'
+        _rxb_prompt='Удалить все бэкапы Xmenu, включая копии конфигураций в /opt/etc/xmenu/backups? Действующий /opt/bin/xmenu останется.'
     fi
     confirm_no "$_rxb_prompt" || { rm -f "$_rxb_list"; say 'Удаление отменено.'; return 1; }
     _rxb_failed=0
@@ -4711,6 +4729,7 @@ remove_menu() {
 main() {
     configure_locale
     require_root || return 1
+    migrate_legacy_xmenu_data || { say "Не удалось перенести данные Xmenu в $ROOT_DIR. Старые файлы сохранены."; return 1; }
     install_xmenu_command || :
     if [ "${1:-menu}" = update-xmenu ]; then
         update_xmenu_script
