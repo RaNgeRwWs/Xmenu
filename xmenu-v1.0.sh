@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.3.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.3.1"
+# Xmenu ◆ v1.3.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.3.2"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xkeen-menu"
@@ -31,12 +31,14 @@ _LAST_MENU_INTERRUPT_TS=0
 _FETCH_FAIL_COUNT=0
 XMENU_UPDATE_REDRAW=0
 XMENU_UPDATE_CHECK_PID=''
+XMENU_MANUAL_UPDATE_CHECK=0
 XMENU_UPDATE_CACHE="$ROOT_DIR/xmenu-update.cache"
 XMENU_UPDATE_LOCK="$ROOT_DIR/.xmenu-update-check.lock"
+XMENU_OPKG_MIRRORS_FILE="$ROOT_DIR/entware-mirrors.conf"
 XMENU_COMPONENT_CACHE="$ROOT_DIR/components-status.cache"
 XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components-status.cache.time"
 XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/.xmenu-component-refresh.lock"
-trap 'XMENU_UPDATE_REDRAW=1' USR1
+trap '[ "${XMENU_MANUAL_UPDATE_CHECK:-0}" = 1 ] || XMENU_UPDATE_REDRAW=1' USR1
 stop_component_status_refresh() {
     [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 0
     [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] || return 0
@@ -3176,8 +3178,23 @@ xmenu_remote_version_probe() {
     return 1
 }
 
+# Stop the automatic probe before a manual check. Both paths share one cache,
+# and an automatic SIGUSR1 during the manual result used to trigger an extra redraw.
+xmenu_stop_update_check() {
+    XMENU_MANUAL_UPDATE_CHECK=1
+    if [ -n "${XMENU_UPDATE_CHECK_PID:-}" ] && [ -d "$XMENU_UPDATE_LOCK" ] &&
+       [ "$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)" = "$$" ] &&
+       [ "$(cat "$XMENU_UPDATE_LOCK/check_pid" 2>/dev/null || :)" = "$XMENU_UPDATE_CHECK_PID" ]; then
+        kill "$XMENU_UPDATE_CHECK_PID" 2>/dev/null || :
+        wait "$XMENU_UPDATE_CHECK_PID" 2>/dev/null || :
+        rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
+    fi
+    XMENU_UPDATE_REDRAW=0
+}
+
 # Force a network check even when the automatic 10-minute cache is still fresh.
 check_xmenu_update_now() {
+    xmenu_stop_update_check
     _cxu_cache_write_failed=0
     _cxu_lang=$(get_ui_lang)
     if [ "$_cxu_lang" = en ]; then
@@ -3191,6 +3208,7 @@ check_xmenu_update_now() {
         else
             say "${RED}Не удалось получить версию Xmenu с сервера. Проверь подключение и повтори попытку.${RESET}"
         fi
+        XMENU_MANUAL_UPDATE_CHECK=0
         return 1
     }
 
@@ -3224,6 +3242,7 @@ check_xmenu_update_now() {
             say "${GREEN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
             say 'Для установки выбери пункт 22 — «Обновить Xmenu с GitHub».'
         fi
+        XMENU_MANUAL_UPDATE_CHECK=0
         return 0
     fi
 
@@ -3240,6 +3259,7 @@ check_xmenu_update_now() {
             say "${GREEN}Установлена актуальная версия Xmenu v$APP_VERSION. Пункт 22 также может применить изменённый код с тем же номером версии.${RESET}"
         fi
     fi
+    XMENU_MANUAL_UPDATE_CHECK=0
     return 0
 }
 
@@ -3398,45 +3418,177 @@ update_xmenu_script() {
     exec "$_ux_target"
 }
 
-# Определяет/переключает только официальные зеркала Entware в /opt/etc/opkg.conf.
-# Источники сторонних репозиториев и файлы /opt/etc/opkg/*.conf не меняются.
+# Каталог зеркал хранится отдельно от скрипта, чтобы администратор мог менять
+# подписи, регионы и адреса без редактирования основной логики Xmenu.
+xmenu_opkg_mirrors_ensure_config() {
+    [ -s "$XMENU_OPKG_MIRRORS_FILE" ] && return 0
+    mkdir -p "$ROOT_DIR" || return 1
+    _omc_tmp="$XMENU_OPKG_MIRRORS_FILE.tmp.$$"
+    cat > "$_omc_tmp" <<'XMENU_ENTWARE_MIRRORS_EOF'
+# id|name|base URL|region
+1|Entware official|http://bin.entware.net|Global
+2|BFSU|https://mirrors.bfsu.edu.cn/entware|China, Beijing
+3|CQUPT|https://mirrors.cqupt.edu.cn/entware|China, Chongqing
+4|NJU|https://mirrors.nju.edu.cn/entware|China, Nanjing
+5|Diversion|https://entware.diversion.ch|Switzerland
+XMENU_ENTWARE_MIRRORS_EOF
+    chmod 644 "$_omc_tmp" 2>/dev/null || :
+    if [ -s "$XMENU_OPKG_MIRRORS_FILE" ]; then
+        rm -f "$_omc_tmp"
+        return 0
+    fi
+    mv -f "$_omc_tmp" "$XMENU_OPKG_MIRRORS_FILE" || { rm -f "$_omc_tmp"; return 1; }
+}
+
+xmenu_opkg_mirror_info_by_id() {
+    _omi_want=$1
+    xmenu_opkg_mirrors_ensure_config || return 1
+    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region; do
+        case "$_omi_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        case "$_omi_url" in http://*|https://*) : ;; *) continue ;; esac
+        case "$_omi_url" in *[!A-Za-z0-9:/._-]*) continue ;; esac
+        [ "$_omi_id" = "$_omi_want" ] || continue
+        XMENU_MIRROR_ID=$_omi_id
+        XMENU_MIRROR_NAME=$_omi_name
+        XMENU_MIRROR_URL=${_omi_url%/}
+        XMENU_MIRROR_REGION=$_omi_region
+        return 0
+    done < "$XMENU_OPKG_MIRRORS_FILE"
+    return 1
+}
+
+xmenu_opkg_mirror_info_by_url() {
+    _omi_want=${1%/}
+    xmenu_opkg_mirrors_ensure_config || return 1
+    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region; do
+        case "$_omi_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        case "$_omi_url" in http://*|https://*) : ;; *) continue ;; esac
+        case "$_omi_url" in *[!A-Za-z0-9:/._-]*) continue ;; esac
+        [ "${_omi_url%/}" = "$_omi_want" ] || continue
+        XMENU_MIRROR_ID=$_omi_id
+        XMENU_MIRROR_NAME=$_omi_name
+        XMENU_MIRROR_URL=$_omi_want
+        XMENU_MIRROR_REGION=$_omi_region
+        return 0
+    done < "$XMENU_OPKG_MIRRORS_FILE"
+    return 1
+}
+
+# Return the first configured Entware source, skipping unrelated third-party
+# feeds so they cannot hide the active Entware architecture path.
+xmenu_opkg_first_catalog_source_url() {
+    _ofp_conf=/opt/etc/opkg.conf
+    [ -r "$_ofp_conf" ] || return 1
+    xmenu_opkg_mirrors_ensure_config || return 1
+    awk -v mirrors="$XMENU_OPKG_MIRRORS_FILE" '
+        BEGIN {
+            while ((getline cfg < mirrors) > 0) {
+                n=split(cfg, f, "|")
+                if (n < 4 || f[1] !~ /^[0-9]+$/ || f[3] !~ /^https?:\/\//) continue
+                rest=f[3]; sub(/^https?:\/\//, "", rest)
+                host=rest; sub(/\/.*/, "", host)
+                prefix=substr(rest, length(host)+1)
+                count++; mirror_host[count]=host; mirror_prefix[count]=prefix
+            }
+            close(mirrors)
+        }
+        ($1 == "src/gz" || $1 == "src") && NF >= 3 {
+            url=$3; sub(/\r$/, "", url)
+            rest=url; sub(/^https?:\/\//, "", rest)
+            if (rest == url) next
+            host=rest; sub(/\/.*/, "", host)
+            path=substr(rest, length(host)+1)
+            for (i=1; i<=count; i++) {
+                if (host != mirror_host[i]) continue
+                prefix=mirror_prefix[i]
+                if (prefix == "" || prefix == "/" || path == prefix || index(path, prefix "/") == 1) {
+                    print url; exit
+                }
+            }
+        }
+    ' "$_ofp_conf"
+}
+
+# Extract the path below the selected mirror's configured prefix. All candidate
+# mirrors are tested against the same package index path.
+xmenu_opkg_feed_path() {
+    _ofp_conf=/opt/etc/opkg.conf
+    [ -r "$_ofp_conf" ] || return 1
+    _ofp_url=$(xmenu_opkg_first_catalog_source_url | tr -d '\r')
+    [ -n "$_ofp_url" ] || return 1
+    _ofp_rest=${_ofp_url#*://}
+    [ "$_ofp_rest" != "$_ofp_url" ] || return 1
+    _ofp_host=${_ofp_rest%%/*}
+    _ofp_path=${_ofp_rest#"$_ofp_host"}
+    [ "$_ofp_path" != "$_ofp_rest" ] || _ofp_path='/'
+    while IFS='|' read -r _ofp_id _ofp_name _ofp_base _ofp_region; do
+        case "$_ofp_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        case "$_ofp_base" in http://*|https://*) : ;; *) continue ;; esac
+        _ofp_base_rest=${_ofp_base#*://}
+        _ofp_base_host=${_ofp_base_rest%%/*}
+        _ofp_prefix=${_ofp_base_rest#"$_ofp_base_host"}
+        [ "$_ofp_prefix" != "$_ofp_base_rest" ] || _ofp_prefix=''
+        [ "$_ofp_host" = "$_ofp_base_host" ] || continue
+        if [ -n "$_ofp_prefix" ] && [ "$_ofp_prefix" != / ]; then
+            case "$_ofp_path" in
+                "$_ofp_prefix"/*) _ofp_path=${_ofp_path#"$_ofp_prefix"} ;;
+                "$_ofp_prefix") _ofp_path='/' ;;
+                *) return 1 ;;
+            esac
+        fi
+        [ -n "$_ofp_path" ] || _ofp_path='/'
+        case "$_ofp_path" in /*) printf '%s' "$_ofp_path" ;; *) printf '/%s' "$_ofp_path" ;; esac
+        return 0
+    done < "$XMENU_OPKG_MIRRORS_FILE"
+    return 1
+}
+
+# Переключает записи зеркал из каталога в /opt/etc/opkg.conf атомарно.
+# Посторонние URL и дополнительные конфиги OPKG остаются нетронутыми.
 xmenu_opkg_mirror_label() {
-    case "$1" in
-        *bin.entware.net*) printf 'Entware official (HTTP)' ;;
-        *mirrors.bfsu.edu.cn*) printf 'BFSU mirror (HTTPS)' ;;
-        *mirrors.cqupt.edu.cn*) printf 'CQUPT mirror (HTTPS)' ;;
-        *mirrors.nju.edu.cn*) printf 'NJU mirror (HTTPS)' ;;
-        *entware.diversion.ch*) printf 'Diversion mirror (HTTPS)' ;;
-        *) printf 'custom / unknown' ;;
-    esac
+    xmenu_opkg_mirror_info_by_url "$1" && printf '%s' "$XMENU_MIRROR_NAME" || printf 'custom / unknown'
 }
 
 xmenu_opkg_set_mirror() {
     _osm_base=$1
-    case "$_osm_base" in
-        http://bin.entware.net|https://mirrors.bfsu.edu.cn/entware|https://mirrors.cqupt.edu.cn/entware|https://mirrors.nju.edu.cn/entware|https://entware.diversion.ch) : ;;
-        *) say "${RED}Неизвестное зеркало Entware; изменение отменено.${RESET}"; return 2 ;;
-    esac
+    xmenu_opkg_mirror_info_by_url "$_osm_base" || { say "${RED}Зеркало отсутствует в каталоге Entware; изменение отменено.${RESET}"; return 2; }
     _osm_conf=/opt/etc/opkg.conf
     _osm_tmp="/opt/etc/.opkg.conf.xmenu.$$"
     [ -r "$_osm_conf" ] || { say "${RED}Не найден $_osm_conf.${RESET}"; return 1; }
     rm -f "$_osm_tmp"
-    awk -v base="$_osm_base" '
-        function mirror_url(url, rest, host, path) {
+    awk -v base="$_osm_base" -v mirrors="$XMENU_OPKG_MIRRORS_FILE" '
+        function mirror_url(url, rest, host, path, i, prefix, suffix) {
             rest=url
             sub(/^https?:\/\//, "", rest)
             host=rest
             sub(/\/.*$/, "", host)
             path=substr(rest, length(host)+1)
-            if (host == "bin.entware.net" || host == "entware.diversion.ch") {
-                # These mirrors publish the architecture directory at the root.
-            } else if (host == "mirrors.bfsu.edu.cn" || host == "mirrors.cqupt.edu.cn" || host == "mirrors.nju.edu.cn") {
-                if (path ~ /^\/entware(\/|$)/) sub(/^\/entware/, "", path)
-            } else {
-                return ""
+            for (i=1; i<=mirror_count; i++) {
+                if (host != mirror_host[i]) continue
+                prefix=mirror_prefix[i]
+                if (prefix != "" && prefix != "/") {
+                    if (path == prefix) path="/"
+                    else if (index(path, prefix "/") == 1) sub("^" prefix, "", path)
+                    else return ""
+                }
+                if (path == "") path="/"
+                suffix=path
+                return base suffix
             }
-            if (path == "") path="/"
-            return base path
+            return ""
+        }
+        BEGIN {
+            while ((getline cfgline < mirrors) > 0) {
+                n=split(cfgline, fields, "|")
+                if (n < 4 || fields[1] !~ /^[0-9]+$/ || fields[3] !~ /^https?:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._-]*)?$/) continue
+                rest=fields[3]; sub(/^https?:\/\//, "", rest)
+                host=rest; sub(/\/.*$/, "", host)
+                prefix=substr(rest, length(host)+1)
+                mirror_count++
+                mirror_host[mirror_count]=host
+                mirror_prefix[mirror_count]=prefix
+            }
+            close(mirrors)
         }
         {
             line=$0
@@ -3475,74 +3627,212 @@ xmenu_opkg_set_mirror() {
     return 0
 }
 
+xmenu_opkg_active_mirror_url() {
+    _oam_conf=/opt/etc/opkg.conf
+    [ -r "$_oam_conf" ] || return 1
+    xmenu_opkg_mirrors_ensure_config || return 1
+    _oam_url=$(xmenu_opkg_first_catalog_source_url | tr -d '\r')
+    _oam_rest=${_oam_url#*://}
+    [ "$_oam_rest" != "$_oam_url" ] || return 1
+    _oam_host=${_oam_rest%%/*}
+    _oam_path=${_oam_rest#"$_oam_host"}
+    [ "$_oam_path" != "$_oam_rest" ] || _oam_path='/'
+    while IFS='|' read -r _oam_id _oam_name _oam_base _oam_region; do
+        case "$_oam_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        _oam_base_rest=${_oam_base#*://}
+        _oam_base_host=${_oam_base_rest%%/*}
+        _oam_prefix=${_oam_base_rest#"$_oam_base_host"}
+        [ "$_oam_prefix" != "$_oam_base_rest" ] || _oam_prefix=''
+        [ "$_oam_host" = "$_oam_base_host" ] || continue
+        if [ -n "$_oam_prefix" ] && [ "$_oam_prefix" != / ]; then
+            case "$_oam_path" in "$_oam_prefix"/*|"$_oam_prefix") : ;; *) continue ;; esac
+        fi
+        printf '%s' "${_oam_base%/}"
+        return 0
+    done < "$XMENU_OPKG_MIRRORS_FILE"
+    return 1
+}
+
+# Ответ: доступно|задержка-мс|HTTP-код. В режиме auto выполняем одну повторную
+# попытку; в интерактивном списке проверяем один раз, чтобы не задерживать UI.
+xmenu_opkg_probe_mirror() {
+    _opm_base=${1%/}
+    _opm_feed=${2#/}
+    _opm_attempts=${3:-1}
+    if [ -n "$_opm_feed" ]; then _opm_url="$_opm_base/$_opm_feed/Packages.gz"
+    else _opm_url="$_opm_base/Packages.gz"; fi
+    _opm_attempt=0
+    _opm_result=''
+    _opm_curl=$(command -v curl 2>/dev/null || printf '')
+    _opm_wget=$(command -v wget 2>/dev/null || printf '')
+    while [ "$_opm_attempt" -lt "$_opm_attempts" ]; do
+        _opm_attempt=$((_opm_attempt + 1))
+        if [ -n "$_opm_curl" ] && [ -x "$_opm_curl" ]; then
+            _opm_result=$("$_opm_curl" -L -sS --connect-timeout 2 --max-time 4 --range 0-0 -o /dev/null -w '%{http_code}|%{time_total}' "$_opm_url" 2>/dev/null || :)
+            _opm_code=${_opm_result%%|*}
+            _opm_seconds=${_opm_result#*|}
+            case "$_opm_code" in
+                2??)
+                    case "$_opm_seconds" in ''|*[!0-9.]*|*.*.*) _opm_ms=999999 ;;
+                    *) _opm_ms=$(awk -v t="$_opm_seconds" 'BEGIN {printf "%d", t * 1000}') ;;
+                    esac
+                    printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
+                    return 0
+                    ;;
+            esac
+        elif [ -n "$_opm_wget" ] && [ -x "$_opm_wget" ]; then
+            if "$_opm_wget" -q -T 4 -O /dev/null "$_opm_url"; then
+                printf 'available|999999|200'
+                return 0
+            fi
+            _opm_code='000'
+        else
+            printf 'unavailable||no-transport'
+            return 0
+        fi
+        [ "$_opm_attempt" -lt "$_opm_attempts" ] && sleep 1
+    done
+    printf 'unavailable||%s' "${_opm_code:-000}"
+}
+
+xmenu_opkg_probe_all() {
+    _opa_force=${1:-0}
+    _opa_attempts=${2:-1}
+    _opa_feed=$(xmenu_opkg_feed_path) || return 1
+    _opa_cache="$ROOT_DIR/opkg-mirrors-status.cache"
+    _opa_now=$(date +%s 2>/dev/null || printf 0)
+    if [ "$_opa_force" != 1 ] && [ -r "$_opa_cache" ]; then
+        _opa_checked=$(sed -n 's/^checked=//p' "$_opa_cache" | sed -n '1p')
+        _opa_cached_feed=$(sed -n 's/^feed=//p' "$_opa_cache" | sed -n '1p')
+        case "$_opa_checked" in ''|*[!0-9]*) _opa_checked=0 ;; esac
+        if [ "$_opa_cached_feed" = "$_opa_feed" ] && [ $((_opa_now - _opa_checked)) -ge 0 ] 2>/dev/null && [ $((_opa_now - _opa_checked)) -lt 60 ] 2>/dev/null; then return 0; fi
+    fi
+    _opa_tmp="$_opa_cache.tmp.$$"
+    {
+        printf 'checked=%s\nfeed=%s\n' "$_opa_now" "$_opa_feed"
+        while IFS='|' read -r _opa_id _opa_name _opa_base _opa_region; do
+            case "$_opa_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+            case "$_opa_base" in http://*|https://*) : ;; *) continue ;; esac
+            case "$_opa_base" in *[!A-Za-z0-9:/._-]*) continue ;; esac
+            _opa_status=$(xmenu_opkg_probe_mirror "$_opa_base" "$_opa_feed" "$_opa_attempts")
+            printf 'mirror=%s|%s\n' "$_opa_id" "$_opa_status"
+        done < "$XMENU_OPKG_MIRRORS_FILE"
+    } > "$_opa_tmp" 2>/dev/null || { rm -f "$_opa_tmp"; return 1; }
+    mv -f "$_opa_tmp" "$_opa_cache" || { rm -f "$_opa_tmp"; return 1; }
+    return 0
+}
+
 xmenu_opkg_check_mirrors() {
     _ocm_conf=/opt/etc/opkg.conf
     [ -r "$_ocm_conf" ] || { say "Не найден $_ocm_conf."; return 1; }
-    _ocm_active_host=$(awk '
-        ($1 == "src/gz" || $1 == "src") && NF >= 3 {
-            url=$3; sub(/\r$/, "", url); sub(/^https?:\/\//, "", url)
-            host=url; sub(/\/.*$/, "", host)
-            if (host == "bin.entware.net" || host == "entware.diversion.ch" || host == "mirrors.bfsu.edu.cn" || host == "mirrors.cqupt.edu.cn" || host == "mirrors.nju.edu.cn") { print host; exit }
-        }
-    ' "$_ocm_conf")
-    _ocm_path=$(awk '
-        ($1 == "src/gz" || $1 == "src") && NF >= 3 {
-            url=$3; sub(/\r$/, "", url); rest=url; sub(/^https?:\/\//, "", rest)
-            host=rest; sub(/\/.*$/, "", host); path=substr(rest, length(host)+1)
-            if (host == "bin.entware.net" || host == "entware.diversion.ch") { print path == "" ? "/" : path; exit }
-            if (host == "mirrors.bfsu.edu.cn" || host == "mirrors.cqupt.edu.cn" || host == "mirrors.nju.edu.cn") {
-                if (path ~ /^\/entware(\/|$)/) sub(/^\/entware/, "", path)
-                print path == "" ? "/" : path; exit
-            }
-        }
-    ' "$_ocm_conf")
-    [ -n "$_ocm_path" ] || { say "Не найдена строка официального Entware feed в $_ocm_conf."; return 1; }
+    _ocm_force=${1:-0}
+    _ocm_feed=$(xmenu_opkg_feed_path) || { say "${RED}Не удалось определить путь Entware-репозитория из $_ocm_conf.${RESET}"; return 1; }
     _ocm_lang=$(get_ui_lang)
+    if [ "$_ocm_force" = 1 ]; then
+        if [ "$_ocm_lang" = en ]; then say 'Refreshing Entware mirror availability…'
+        else say 'Обновляю доступность зеркал Entware…'; fi
+    fi
+    xmenu_opkg_probe_all "$_ocm_force" 1 || { say "${RED}Не удалось проверить зеркала: проверь opkg.conf и сеть.${RESET}"; return 1; }
+    _ocm_active=$(xmenu_opkg_active_mirror_url 2>/dev/null || :)
+    _ocm_cache="$ROOT_DIR/opkg-mirrors-status.cache"
+    _ocm_feed_suffix=${_ocm_feed#/}
     line
     if [ "$_ocm_lang" = en ]; then
-        say "${WHITE}◆ ENTWARE MIRROR AVAILABILITY${RESET}"
-        say 'Each mirror is checked against the Packages.gz index (up to 6 seconds).'
-        [ -n "$_ocm_active_host" ] && say "Active source: ${CYAN}$_ocm_active_host${RESET}"
+        say "${WHITE}◆ ENTWARE REPOSITORIES${RESET}"
+        say 'Status is checked against the Packages.gz index.'
+        [ -n "$_ocm_active" ] && say "Current repository: ${CYAN}$_ocm_active${RESET}"
     else
-        say "${WHITE}◆ ДОСТУПНОСТЬ ЗЕРКАЛ ENTWARE${RESET}"
-        say 'Проверяю индекс Packages.gz (до 6 секунд на каждое зеркало).'
-        [ -n "$_ocm_active_host" ] && say "Активный источник: ${CYAN}$_ocm_active_host${RESET}"
+        say "${WHITE}◆ РЕПОЗИТОРИИ ENTWARE / OPKG${RESET}"
+        say 'Проверяется индекс пакетов Packages.gz.'
+        [ -n "$_ocm_active" ] && say "Текущий репозиторий: ${CYAN}$_ocm_active${RESET}"
     fi
     line
     _ocm_available=0
     _ocm_total=0
-    for _ocm_base in 'http://bin.entware.net' 'https://mirrors.bfsu.edu.cn/entware' 'https://mirrors.cqupt.edu.cn/entware' 'https://mirrors.nju.edu.cn/entware' 'https://entware.diversion.ch'; do
+    while IFS='|' read -r _ocm_id _ocm_name _ocm_base _ocm_region; do
+        case "$_ocm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        case "$_ocm_base" in http://*|https://*) : ;; *) continue ;; esac
         _ocm_total=$((_ocm_total + 1))
-        _ocm_url="$_ocm_base$_ocm_path/Packages.gz"
-        _ocm_label=$(xmenu_opkg_mirror_label "$_ocm_base")
-        _ocm_ok=0
-        _ocm_curl=$(command -v curl 2>/dev/null || printf '')
-        if [ -n "$_ocm_curl" ] && [ -x "$_ocm_curl" ]; then
-            _ocm_code=$("$_ocm_curl" -L -sS --fail --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' "$_ocm_url" 2>/dev/null) && case "$_ocm_code" in 2??) _ocm_ok=1 ;; esac
-        else
-            _ocm_wget=$(command -v wget 2>/dev/null || printf '')
-            if [ -n "$_ocm_wget" ] && [ -x "$_ocm_wget" ] && "$_ocm_wget" -q -T 6 -O /dev/null "$_ocm_url"; then _ocm_ok=1; fi
-        fi
-        _ocm_host=${_ocm_base#*://}
-        _ocm_host=${_ocm_host%%/*}
+        _ocm_row=$(awk -F '|' -v id="$_ocm_id" '$1=="mirror=" id {print $2; exit}' "$_ocm_cache")
+        _ocm_state=${_ocm_row%%|*}
+        _ocm_rest=${_ocm_row#*|}
+        _ocm_ms=${_ocm_rest%%|*}
+        _ocm_host_url=${_ocm_base#*://}; _ocm_host=${_ocm_host_url%%/*}
         _ocm_marker=''
-        [ "$_ocm_host" = "$_ocm_active_host" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  [ACTIVE]'; else _ocm_marker='  [ТЕКУЩЕЕ]'; fi; }
-        if [ "$_ocm_ok" = 1 ]; then
-            _ocm_available=$((_ocm_available + 1))
-            if [ "$_ocm_lang" = en ]; then say "  ${GREEN}● AVAILABLE${RESET}   $_ocm_label$_ocm_marker"; else say "  ${GREEN}● ДОСТУПНО${RESET}    $_ocm_label$_ocm_marker"; fi
+        [ "$_ocm_base" = "$_ocm_active" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  ✓ CURRENT'; else _ocm_marker='  ✓ ТЕКУЩЕЕ'; fi; }
+        case "$_ocm_state" in
+            available)
+                _ocm_available=$((_ocm_available + 1))
+                if [ "$_ocm_lang" = en ]; then _ocm_status="${GREEN}● AVAILABLE${RESET}"; _ocm_time="${_ocm_ms} ms"
+                else _ocm_status="${GREEN}● ДОСТУПНО${RESET}"; _ocm_time="${_ocm_ms} мс"; fi ;;
+            *) if [ "$_ocm_lang" = en ]; then _ocm_status="${RED}● UNAVAILABLE${RESET}"; _ocm_time='—'
+               else _ocm_status="${RED}● НЕДОСТУПНО${RESET}"; _ocm_time='—'; fi ;;
+        esac
+        say "  $_ocm_status  $_ocm_name — $_ocm_region$_ocm_marker"
+        if [ -n "$_ocm_feed_suffix" ]; then
+            say "      URL: ${_ocm_base%/}/$_ocm_feed_suffix/Packages.gz  ($_ocm_time)"
         else
-            if [ "$_ocm_lang" = en ]; then say "  ${RED}● UNAVAILABLE${RESET} $_ocm_label$_ocm_marker"; else say "  ${RED}● НЕДОСТУПНО${RESET} $_ocm_label$_ocm_marker"; fi
+            say "      URL: ${_ocm_base%/}/Packages.gz  ($_ocm_time)"
         fi
-    done
+    done < "$XMENU_OPKG_MIRRORS_FILE"
     line
-    if [ "$_ocm_lang" = en ]; then
-        say "Available: ${GREEN}$_ocm_available${RESET} / $_ocm_total"
-        say 'Choose an available mirror in OPKG settings, then run opkg update if needed.'
-    else
-        say "Доступно: ${GREEN}$_ocm_available${RESET} из $_ocm_total"
-        say 'Выбери доступное зеркало в настройках OPKG; при необходимости отдельно запусти opkg update.'
+    if [ "$_ocm_lang" = en ]; then say "Available repositories: ${GREEN}$_ocm_available${RESET} / $_ocm_total"
+    else say "Доступно репозиториев: ${GREEN}$_ocm_available${RESET} из $_ocm_total"; fi
+    line
+}
+
+xmenu_opkg_auto_select_mirror() {
+    _oas_feed=$(xmenu_opkg_feed_path) || { say "${RED}Не удалось определить путь репозитория. Проверь /opt/etc/opkg.conf.${RESET}"; return 1; }
+    _oas_lang=$(get_ui_lang)
+    if [ "$_oas_lang" = en ]; then say 'Testing repository response time (one retry on connection failure)…'
+    else say 'Проверяю скорость зеркал (одна повторная попытка при ошибке связи)…'; fi
+    xmenu_opkg_probe_all 1 2 || { say "${RED}Не удалось проверить репозитории. Проверь URL в /opt/etc/opkg.conf и подключение к интернету.${RESET}"; return 1; }
+    _oas_cache="$ROOT_DIR/opkg-mirrors-status.cache"
+    _oas_best_id=''
+    _oas_best_ms=2147483647
+    while IFS='|' read -r _oas_id _oas_name _oas_base _oas_region; do
+        case "$_oas_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+        _oas_row=$(awk -F '|' -v id="$_oas_id" '$1=="mirror=" id {print $2; exit}' "$_oas_cache")
+        _oas_state=${_oas_row%%|*}
+        _oas_rest=${_oas_row#*|}
+        _oas_ms=${_oas_rest%%|*}
+        [ "$_oas_state" = available ] || continue
+        case "$_oas_ms" in ''|*[!0-9]*) _oas_ms=999999 ;; esac
+        if [ -z "$_oas_best_id" ] || [ "$_oas_ms" -lt "$_oas_best_ms" ]; then
+            _oas_best_id=$_oas_id
+            _oas_best_ms=$_oas_ms
+        fi
+    done < "$XMENU_OPKG_MIRRORS_FILE"
+    if [ -z "$_oas_best_id" ] || ! xmenu_opkg_mirror_info_by_id "$_oas_best_id"; then
+        if [ "$_oas_lang" = en ]; then say "${RED}No Entware repository responded successfully. Configuration was not changed.${RESET}"
+        else say "${RED}Не найдено доступных зеркал Entware. Конфигурация не изменена.${RESET}"; fi
+        return 1
     fi
-    line
+    _oas_name=$XMENU_MIRROR_NAME
+    _oas_base=$XMENU_MIRROR_URL
+    _oas_region=$XMENU_MIRROR_REGION
+    xmenu_opkg_set_mirror "$_oas_base" || return 1
+    if [ "$_oas_lang" = en ]; then
+        say "${GREEN}Selected $_oas_name ($_oas_region), response time ${_oas_best_ms} ms.${RESET}"
+        say 'The new source is active immediately; run opkg update to refresh package indexes.'
+    else
+        say "${GREEN}Выбрано зеркало $_oas_name ($_oas_region), отклик ${_oas_best_ms} мс.${RESET}"
+        say 'Новый источник действует сразу; для обновления индексов запусти opkg update.'
+    fi
+}
+
+xmenu_opkg_check_selected_mirror() {
+    _ocsm_base=$(xmenu_opkg_active_mirror_url) || { say 'В opkg.conf не найден текущий репозиторий из каталога.'; return 1; }
+    _ocsm_feed=$(xmenu_opkg_feed_path) || return 1
+    xmenu_opkg_mirror_info_by_url "$_ocsm_base" || return 1
+    _ocsm_status=$(xmenu_opkg_probe_mirror "$_ocsm_base" "$_ocsm_feed" 1)
+    if [ "${_ocsm_status%%|*}" = available ]; then
+        _ocsm_rest=${_ocsm_status#*|}; _ocsm_ms=${_ocsm_rest%%|*}
+        say "${GREEN}✓ $XMENU_MIRROR_NAME — доступно (${_ocsm_ms} мс)${RESET}"
+    else
+        say "${RED}✗ $XMENU_MIRROR_NAME — не отвечает. Выбери другой репозиторий или запусти авто-выбор.${RESET}"
+        return 1
+    fi
 }
 
 xmenu_opkg_restore_config() {
@@ -3558,68 +3848,95 @@ xmenu_opkg_restore_config() {
     say "${GREEN}Конфигурация OPKG восстановлена из бэкапа.${RESET}"
 }
 
+xmenu_opkg_manual_mirror_menu() {
+    _omm_lang=$(get_ui_lang)
+    xmenu_opkg_mirrors_ensure_config || { say 'Не удалось загрузить каталог зеркал.'; return 1; }
+    while :; do
+        xmenu_opkg_check_mirrors 0 || :
+        if [ "$_omm_lang" = en ]; then
+            say 'Select a repository by number. You can still select a mirror marked unavailable.'
+            say 'R — refresh status; T — test the current repository.'
+            _omm_prompt='[?] Repository: '
+            _omm_refresh='Refresh mirror availability'
+            _omm_test='Check the selected repository'
+            _omm_back='Back'
+        else
+            say 'Выбери зеркало по номеру. Недоступное зеркало тоже можно выбрать вручную.'
+            say 'R — обновить статусы; T — проверить текущее зеркало.'
+            _omm_prompt='[?] Репозиторий: '
+            _omm_refresh='Обновить доступность зеркал'
+            _omm_test='Проверить выбранное зеркало'
+            _omm_back='Назад'
+        fi
+        while IFS='|' read -r _omm_id _omm_name _omm_url _omm_region; do
+            case "$_omm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
+            case "$_omm_url" in http://*|https://*) : ;; *) continue ;; esac
+            menu_item "$_omm_id" "$_omm_name — $_omm_region ($_omm_url)"
+        done < "$XMENU_OPKG_MIRRORS_FILE"
+        menu_item R "$_omm_refresh"
+        menu_item T "$_omm_test"
+        menu_item 0 "$_omm_back"
+        _read_or_eof "$_omm_prompt" || return 0
+        case "$_read_value" in
+            R|r) xmenu_opkg_check_mirrors 1; pause ;;
+            T|t) xmenu_opkg_check_selected_mirror; pause ;;
+            0|'') return 0 ;;
+            *[!0-9]*) say 'Неверный пункт.'; sleep 1 ;;
+            *)
+                if xmenu_opkg_mirror_info_by_id "$_read_value"; then
+                    xmenu_opkg_set_mirror "$XMENU_MIRROR_URL"
+                    pause
+                else
+                    say 'Такого зеркала нет в каталоге.'
+                    sleep 1
+                fi
+                ;;
+        esac
+    done
+}
+
 opkg_settings_menu() {
     _osm_lang=$(get_ui_lang)
     while :; do
         line
         if [ "$_osm_lang" = en ]; then
-            say "${WHITE}OPKG settings${RESET}"
-            say 'Current Entware source lines:'
-        else
-            say "${WHITE}Настройки OPKG / зеркала Entware${RESET}"
-            say 'Текущие строки источников из /opt/etc/opkg.conf:'
-        fi
-        if [ -r /opt/etc/opkg.conf ]; then
-            grep -E '^[[:space:]]*src/gz[[:space:]]+' /opt/etc/opkg.conf || say '(src/gz entries not found)'
-        else
-            say '/opt/etc/opkg.conf не найден.'
-        fi
-        say ''
-        if [ "$_osm_lang" = en ]; then
-            menu_item 1 'Official Entware mirror (HTTP)'
-            menu_item 2 'BFSU mirror (HTTPS)'
-            menu_item 3 'CQUPT mirror (HTTPS)'
-            menu_item 4 'NJU mirror (HTTPS)'
-            menu_item 5 'Diversion mirror (HTTPS)'
-            menu_item 6 'Run opkg update now (may hang if network is slow)'
-            menu_item 7 'Restore latest opkg.conf backup'
-            say "${CYAN}◆  Connection check${RESET}"
-            menu_item 8 'Check Entware mirror availability'
+            say "${WHITE}OPKG / Entware repositories${RESET}"
+            say 'Choose how to select the package repository.'
+            menu_item 1 'Auto-select the fastest available Entware repository'
+            say '    Tests mirrors and switches to the fastest responding one.'
+            menu_item 2 'Choose an Entware repository manually'
+            say '    View status, region and URL; test or switch a mirror.'
+            menu_item 3 'Run opkg update now'
+            menu_item 4 'Restore latest opkg.conf backup'
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
         else
-            menu_item 1 'Официальное зеркало Entware (HTTP)'
-            menu_item 2 'Зеркало BFSU (HTTPS)'
-            menu_item 3 'Зеркало CQUPT (HTTPS)'
-            menu_item 4 'Зеркало NJU (HTTPS)'
-            menu_item 5 'Зеркало Diversion (HTTPS)'
-            menu_item 6 'Запустить opkg update сейчас (при медленной сети может зависать)'
-            menu_item 7 'Восстановить последнюю копию opkg.conf'
-            say "${CYAN}◆  Проверка подключения${RESET}"
-            menu_item 8 'Проверить доступность зеркал Entware'
+            say "${WHITE}Репозитории OPKG / Entware${RESET}"
+            say 'Выбери способ настройки репозитория пакетов.'
+            menu_item 1 'Авто-выбор доступного репозитория Entware/OPKG'
+            say '    Проверит зеркала и выберет самое быстрое из доступных.'
+            menu_item 2 'Ручной выбор репозитория'
+            say '    Покажет статус, регион и URL; позволит проверить или сменить зеркало.'
+            menu_item 3 'Запустить opkg update'
+            menu_item 4 'Восстановить резервную копию opkg.conf'
             menu_item 0 'Назад'
             _osm_prompt='[?] Выбери пункт: '
         fi
         _read_or_eof "$_osm_prompt" || return 0
         case "$_read_value" in
-            1) xmenu_opkg_set_mirror 'http://bin.entware.net'; _osm_rc=$?; pause ;;
-            2) xmenu_opkg_set_mirror 'https://mirrors.bfsu.edu.cn/entware'; _osm_rc=$?; pause ;;
-            3) xmenu_opkg_set_mirror 'https://mirrors.cqupt.edu.cn/entware'; _osm_rc=$?; pause ;;
-            4) xmenu_opkg_set_mirror 'https://mirrors.nju.edu.cn/entware'; _osm_rc=$?; pause ;;
-            5) xmenu_opkg_set_mirror 'https://entware.diversion.ch'; _osm_rc=$?; pause ;;
-            6)
+            1) xmenu_opkg_auto_select_mirror; pause ;;
+            2) xmenu_opkg_manual_mirror_menu ;;
+            3)
                 say 'opkg update обновляет индексы репозитория, это не обновление установленных пакетов.'
                 say 'Если загрузка снова зависнет, нажми Ctrl+C. Зеркало останется выбранным.'
                 confirm 'Выполнить opkg update?' && opkg update
                 pause ;;
-            7) xmenu_opkg_restore_config; pause ;;
-            8) xmenu_opkg_check_mirrors; pause ;;
+            4) xmenu_opkg_restore_config; pause ;;
             0|'') return 0 ;;
             *) say 'Неверный пункт.'; sleep 1 ;;
         esac
     done
 }
-
 change_ui_language() {
     _lang_now=$(get_ui_lang)
     if [ "$_lang_now" = en ]; then set_ui_lang ru; else set_ui_lang en; fi
