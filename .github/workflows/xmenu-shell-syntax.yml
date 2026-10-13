@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - "xmenu-v1.0.sh"
+      - "tests/**"
       - ".github/workflows/xmenu-shell-syntax.yml"
   pull_request:
     paths:
       - "xmenu-v1.0.sh"
+      - "tests/**"
       - ".github/workflows/xmenu-shell-syntax.yml"
 
 jobs:
@@ -18,3 +20,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Validate POSIX shell syntax
         run: sh -n xmenu-v1.0.sh
+      - name: Install audit tools
+        run: sudo apt-get update && sudo apt-get install -y busybox shellcheck
+      - name: Audit complete script
+        run: shellcheck -s sh -S warning xmenu-v1.0.sh
+      - name: Run regression scenarios in BusyBox ash
+        run: busybox ash tests/regression.sh
+      - name: Check interactive menu input in PTY
+        run: python3 tests/menu_input.py

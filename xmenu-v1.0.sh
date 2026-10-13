@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.3.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.3.2"
+# Xmenu ◆ v1.3.3 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.3.3"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xmenu"
@@ -11,7 +11,6 @@ NF_REPO="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main"
 XMENU_UPDATE_URL="https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh"
 XKEEN_INSTALLER="https://raw.githubusercontent.com/jameszeroX/XKeen/main/install.sh"
 XKEEN_UI_INSTALLER="https://raw.githubusercontent.com/zxc-rv/XKeen-UI/main/setup.sh"
-NFQWS2_UI_INSTALLER="https://github.com/zemidala/nfqws2-ui/releases/latest/download/install.sh"
 DPI_RUST_INSTALLER_URL="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh"
 DPI_RUST_INSTALLER_MIRROR="https://cdn.jsdelivr.net/gh/Runnin4ik/dpi-detector@rust/install.sh"
 NFQWS2_REPO_BASE="https://nfqws.github.io/nfqws2-keenetic"
@@ -23,8 +22,6 @@ export PATH
 WORK=""
 LOCK_DIR="/opt/var/lock/xmenu-operation.lock"
 LOCK_HELD=0
-MENU_SESSION_LOCK_DIR="/opt/var/lock/xmenu-session.lock"
-MENU_SESSION_LOCK_HELD=0
 INTERRUPTED=0
 MENU_READING=0
 _LAST_MENU_INTERRUPT_TS=0
@@ -73,20 +70,12 @@ cleanup() {
         fi
         stop_component_status_refresh
         rm -f "$ROOT_DIR/.xmenu-update-cache.$$" /tmp/xmenu-version-"$$" 2>/dev/null || :
-        for _cleanup_path in /tmp/xmenu-*-"$$"* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*.tmp "$ROOT_DIR"/work-* "$ROOT_DIR"/apply-*.conf "$ROOT_DIR"/active-strategy-update.* "$ROOT_DIR"/blobwork.* "$ROOT_DIR"/dpi-rust-installer.* "$ROOT_DIR"/install-xkeen-upstream."$$" "$ROOT_DIR"/install-xkeen-upstream."$$".normalized "$ROOT_DIR"/install-xkeen-stable-auto."$$" "$ROOT_DIR/.components-installed.$$" "$ROOT_DIR/.opkg-installed.$$"; do
+        for _cleanup_path in /tmp/xmenu-*-"$$" /tmp/xmenu-*-"$$".* "$ROOT_DIR"/*."$$" "$ROOT_DIR"/*."$$".* "$ROOT_DIR"/.*."$$" "$ROOT_DIR"/.*."$$".* "$ROOT_DIR"/*-"$$" "$ROOT_DIR"/*-"$$".*; do
             [ -e "$_cleanup_path" ] || [ -L "$_cleanup_path" ] || continue
             case "$_cleanup_path" in /tmp/xmenu-*|"$ROOT_DIR"/*) rm -rf "$_cleanup_path" 2>/dev/null || : ;; esac
         done
     fi
-    if [ "$LOCK_HELD" = 1 ] && [ -d "$LOCK_DIR" ]; then
-        _cleanup_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || :)
-        if [ "$_cleanup_pid" = "$$" ]; then
-            rm -f "$LOCK_DIR/pid" 2>/dev/null || :
-            rmdir "$LOCK_DIR" 2>/dev/null || rm -rf "$LOCK_DIR" 2>/dev/null || :
-        fi
-    fi
-    LOCK_HELD=0
-    if [ "$_cleanup_mode" = final ]; then release_menu_session_lock; fi
+    release_operation_lock
 }
 on_int() {
     INTERRUPTED=1
@@ -113,9 +102,9 @@ trap 'cleanup final' 0
 
 if [ -t 1 ]; then
     RESET=$(printf '\033[0m'); PURPLE=$(printf '\033[35m'); LAVENDER=$(printf '\033[95m'); WHITE=$(printf '\033[97m')
-    MUTED=$(printf '\033[90m'); GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m'); RED=$(printf '\033[31m'); BRIGHT_RED=$(printf '\033[91m'); CYAN=$(printf '\033[36m')
+    MUTED=$(printf '\033[90m'); GREEN=$(printf '\033[32m'); YELLOW=$(printf '\033[33m'); RED=$(printf '\033[31m'); CYAN=$(printf '\033[36m'); ACTIVE=$(printf '\033[1;92m')
 else
-    RESET=''; PURPLE=''; LAVENDER=''; WHITE=''; MUTED=''; GREEN=''; YELLOW=''; RED=''; BRIGHT_RED=''; CYAN=''
+    RESET=''; PURPLE=''; LAVENDER=''; WHITE=''; MUTED=''; GREEN=''; YELLOW=''; RED=''; CYAN=''; ACTIVE=''
 fi
 say() { printf '%s\n' "$*"; }
 
@@ -324,7 +313,7 @@ _read_or_eof() {
 # Подтверждение с ответом «да» по умолчанию; неверный ответ вызывает повтор вопроса.
 confirm_yes() {
     while :; do
-        _read_or_eof "${YELLOW}${1:-Продолжить?} [Y/n]: ${RESET}" || return 0
+        _read_or_eof "${YELLOW}${1:-Продолжить?} [Y/n]: ${RESET}" || return 1
         case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
             ''|y|yes|да|д|true|1) return 0 ;;
             n|no|нет|н|false|0) return 1 ;;
@@ -340,18 +329,6 @@ confirm_no() {
         case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
             y|yes|да|д|true|1) return 0 ;;
             ''|n|no|нет|н|false|0) return 1 ;;
-            *) say "Введите да или нет (y/n)." ;;
-        esac
-    done
-}
-
-# Подтверждение с безопасным ответом «да» по умолчанию (например, сохранить бэкапы).
-confirm_yes() {
-    while :; do
-        _read_or_eof "${YELLOW}${1:-Сохранить?} [Y/n]: ${RESET}" || return 0
-        case "$(printf '%s' "$_read_value" | tr '[:upper:]' '[:lower:]')" in
-            ''|y|yes|да|д|true|1) return 0 ;;
-            n|no|нет|н|false|0) return 1 ;;
             *) say "Введите да или нет (y/n)." ;;
         esac
     done
@@ -438,6 +415,8 @@ install_transport() {
 }
 migrate_legacy_xmenu_data() {
     _mld_old='/opt/etc/xkeen-menu'
+    # Не возвращаем удалённые бэкапы при последующих запусках меню.
+    [ -f "$ROOT_DIR/.legacy-data-migrated" ] && return 0
     [ -d "$_mld_old" ] || return 0
     mkdir -p "$ROOT_DIR" || return 1
     _mld_list="/tmp/xmenu-migrate-$$"
@@ -446,13 +425,15 @@ migrate_legacy_xmenu_data() {
     while IFS= read -r _mld_file || [ -n "$_mld_file" ]; do
         [ -n "$_mld_file" ] || continue
         _mld_relative=${_mld_file#"$_mld_old"/}
+        case "$_mld_relative" in .xmenu-update-check.lock/*|.xmenu-component-refresh.lock/*) continue ;; esac
         _mld_target="$ROOT_DIR/$_mld_relative"
         if [ -e "$_mld_target" ] || [ -L "$_mld_target" ]; then continue; fi
         mkdir -p "${_mld_target%/*}" || { _mld_failed=1; continue; }
         cp -p "$_mld_file" "$_mld_target" 2>/dev/null || _mld_failed=1
     done < "$_mld_list"
     rm -f "$_mld_list"
-    [ "$_mld_failed" = 0 ]
+    [ "$_mld_failed" = 0 ] || return 1
+    : > "$ROOT_DIR/.legacy-data-migrated"
 }
 ensure_dirs() {
     mkdir -p "$ROOT_DIR" "$BACKUP_DIR" /opt/tmp /opt/share/xmenu /opt/var/log || {
@@ -568,8 +549,8 @@ normalize_arch() {
         aarch64*|arm64*) echo aarch64 ;;
         armv7*|armhf*) echo armv7 ;;
         armv6*|arm*) echo '' ;;
-        mipsel*|mipselsf*|mips64el*) echo mipsel ;;
-        mips*|mipssf*) echo mips ;;
+        mipsel*|mips64el*) echo mipsel ;;
+        mips*) echo mips ;;
         x86_64*|amd64*|x64*) echo x86_64 ;;
         i[3-6]86*|x86*|i686*) echo x86 ;;
         *) echo '' ;;
@@ -1599,7 +1580,7 @@ update_blobs_for() {
         [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_ub_work"; say 'Загрузка blobs прервана пользователем.'; return 130; }
         [ -n "$_ub_path" ] || continue
         _ub_name=${_ub_path##*/}
-        case "$_ub_name" in *[!A-Za-z0-9_.+-]*|*..*|.|..) say "${YELLOW}Пропуск небезопасного имени blob: $_ub_name${RESET}"; _ub_failed=1; continue ;; esac
+        case "$_ub_name" in ''|*[!A-Za-z0-9_.+-]*|*..*|.) say "${YELLOW}Пропуск небезопасного имени blob: $_ub_name${RESET}"; _ub_failed=1; continue ;; esac
         case "$_ub_path" in
             "$_ub_root"/*) ;;
             "$_ub_default"/*) ;;
@@ -2047,7 +2028,7 @@ XMENU_STRATEGY_ORDER
     case "$_n" in ''|0) return 0;; *[!0-9]*) say 'Неверный номер.'; return 1;; esac
     _name=$(sed -n "${_n}p" "$_list")
     case "$_name" in
-        ''|.|..|*/*|*../*|../*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\\'*)
+        ''|.|*/*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\\'*)
             say 'Недопустимое имя стратегии.'; return 1 ;;
     esac
     printf '%s\n' "$_name" | LC_ALL=C grep -Eq '^[A-Za-z0-9_.+ -]+$' || {
@@ -2272,117 +2253,67 @@ sync_active_blobs() {
     SYNC_ALLOW_STRATEGY_UPDATE=0
     return "$_rc"
 }
-release_menu_session_lock() {
-    [ "$MENU_SESSION_LOCK_HELD" = 1 ] && [ -d "$MENU_SESSION_LOCK_DIR" ] || return 0
-    _menu_release_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
-    if [ "$_menu_release_pid" = "$$" ]; then
-        rm -f "$MENU_SESSION_LOCK_DIR/pid" "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :
-        rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || rm -rf "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-    fi
-    MENU_SESSION_LOCK_HELD=0
-}
-
-menu_session_process_start() {
+xmenu_process_start() {
     [ -r "/proc/$1/stat" ] || return 1
-    # После удаления имени процесса в скобках starttime — поле 20.
-    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+    # После имени процесса в скобках starttime находится в поле 20.
+    sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
 }
 
-menu_session_process_state() {
-    [ -r "/proc/$1/stat" ] || return 1
-    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $1}'
-}
-
-menu_session_lock_owner_is_stale() {
-    _mslo_pid=$1
-    _mslo_recorded_start=$(cat "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :)
-    _mslo_actual_start=$(menu_session_process_start "$_mslo_pid" 2>/dev/null || :)
-    if [ -n "$_mslo_actual_start" ]; then
-        _mslo_state=$(menu_session_process_state "$_mslo_pid" 2>/dev/null || :)
-        case "$_mslo_state" in Z|X) return 0 ;; esac
-        if [ -n "$_mslo_recorded_start" ]; then
-            [ "$_mslo_actual_start" != "$_mslo_recorded_start" ]
-            return $?
-        fi
-        # Старые версии Xmenu сохраняли только PID. Для такого lock проверяем,
-        # что PID всё ещё принадлежит процессу Xmenu, а не другому процессу.
-        _mslo_cmdline=$(tr '\000' ' ' < "/proc/$_mslo_pid/cmdline" 2>/dev/null || :)
-        case "$_mslo_cmdline" in *xmenu*) return 1 ;; *) return 0 ;; esac
+release_operation_lock() {
+    if [ "$LOCK_HELD" = 1 ] && [ -d "$LOCK_DIR" ] &&
+       [ "$(cat "$LOCK_DIR/pid" 2>/dev/null || :)" = "$$" ]; then
+        rm -f "$LOCK_DIR/pid" "$LOCK_DIR/start" 2>/dev/null || :
+        rmdir "$LOCK_DIR" 2>/dev/null || :
     fi
-    ! kill -0 "$_mslo_pid" 2>/dev/null
+    LOCK_HELD=0
 }
 
-menu_session_lock_publish() {
-    MENU_SESSION_LOCK_HELD=1
-    _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
-    printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
-        mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
-            rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
-            rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-            MENU_SESSION_LOCK_HELD=0
-            return 1
-        }
-    _menu_lock_start=$(menu_session_process_start "$$" 2>/dev/null || :)
-    if [ -n "$_menu_lock_start" ]; then
-        printf '%s\n' "$_menu_lock_start" > "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :
+operation_lock_publish() {
+    if ! printf '%s\n' "$$" > "$LOCK_DIR/pid"; then
+        rmdir "$LOCK_DIR" 2>/dev/null || :
+        return 1
     fi
+    _olp_start=$(xmenu_process_start "$$" 2>/dev/null || :)
+    [ -z "$_olp_start" ] || printf '%s\n' "$_olp_start" > "$LOCK_DIR/start"
+    LOCK_HELD=1
     return 0
-}
-
-acquire_menu_session_lock() {
-    mkdir -p "$(dirname "$MENU_SESSION_LOCK_DIR")" || return 1
-    if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
-        menu_session_lock_publish || { say 'Не удалось создать блокировку сессии Xmenu.'; return 1; }
-        return 0
-    fi
-    _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
-    case "$_menu_lock_pid" in ''|*[!0-9]*)
-        # Дайте процессу, который только что создал каталог, время записать PID.
-        _menu_lock_wait=0
-        while [ "$_menu_lock_wait" -lt 10 ] && [ ! -s "$MENU_SESSION_LOCK_DIR/pid" ]; do
-            sleep 0.1
-            _menu_lock_wait=$((_menu_lock_wait + 1))
-        done
-        _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
-        ;;
-    esac
-    case "$_menu_lock_pid" in ''|*[!0-9]*) _menu_lock_stale=1 ;;
-        *) if menu_session_lock_owner_is_stale "$_menu_lock_pid"; then _menu_lock_stale=1; else _menu_lock_stale=0; fi ;;
-    esac
-    if [ "$_menu_lock_stale" = 1 ]; then
-        rm -f "$MENU_SESSION_LOCK_DIR/pid" "$MENU_SESSION_LOCK_DIR/start" "$MENU_SESSION_LOCK_DIR"/.pid.* 2>/dev/null || :
-        rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-        if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
-            menu_session_lock_publish && return 0
-        fi
-    fi
-    say 'Меню Xmenu уже открыто или запускается в другой SSH-сессии. Закрой его или дождись завершения.'
-    return 1
 }
 
 acquire_lock() {
     mkdir -p "$(dirname "$LOCK_DIR")" || return 1
     if mkdir "$LOCK_DIR" 2>/dev/null; then
-        LOCK_HELD=1
-        printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || :
-        return 0
+        operation_lock_publish
+        return $?
     fi
     # Удаляем устаревшую блокировку только после завершения указанного процесса.
     _lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || :)
+    _lock_stale=0
     case "$_lock_pid" in
-        ''|*[!0-9]*) ;;
-        *)
-            if ! kill -0 "$_lock_pid" 2>/dev/null; then
-                rm -f "$LOCK_DIR/pid" 2>/dev/null || :
-                rmdir "$LOCK_DIR" 2>/dev/null || :
-                if mkdir "$LOCK_DIR" 2>/dev/null; then
-                    LOCK_HELD=1
-                    printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || :
-                    return 0
-                fi
-            fi
+        ''|*[!0-9]*)
+            # Учитываем паузу между mkdir и записью PID параллельной сессией.
+            sleep 1
+            _lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || :)
+            case "$_lock_pid" in ''|*[!0-9]*) _lock_stale=1 ;; esac
             ;;
     esac
+    case "$_lock_pid" in
+        ''|*[!0-9]*) : ;;
+        *)
+            _lock_recorded_start=$(cat "$LOCK_DIR/start" 2>/dev/null || :)
+            _lock_actual_start=$(xmenu_process_start "$_lock_pid" 2>/dev/null || :)
+            if ! kill -0 "$_lock_pid" 2>/dev/null; then _lock_stale=1
+            elif [ -n "$_lock_recorded_start" ] && [ -n "$_lock_actual_start" ] &&
+                 [ "$_lock_recorded_start" != "$_lock_actual_start" ]; then _lock_stale=1; fi
+            ;;
+    esac
+    if [ "$_lock_stale" = 1 ]; then
+        rm -f "$LOCK_DIR/pid" "$LOCK_DIR/start" 2>/dev/null || :
+        rmdir "$LOCK_DIR" 2>/dev/null || :
+        if mkdir "$LOCK_DIR" 2>/dev/null; then
+            operation_lock_publish
+            return $?
+        fi
+    fi
     say "${YELLOW}Другая операция xmenu уже меняет настройки. Подожди и повтори.${RESET}"
     return 1
 }
@@ -3112,6 +3043,11 @@ xmenu_wget_bounded() {
     _xwb_limit=$1
     _xwb_wget=$2
     shift 2
+    # В урезанных BusyBox-сборках -t может отсутствовать; GNU wget его требует
+    # для ограничения повторных попыток. Общий timeout используется независимо.
+    if "$_xwb_wget" --help 2>&1 | grep -Eq -- '--tries|(^|[[:space:]])-t([,[:space:]]|$)'; then
+        set -- -t 1 "$@"
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_xwb_limit" "$_xwb_wget" "$@"
         return $?
@@ -3120,8 +3056,8 @@ xmenu_wget_bounded() {
         busybox timeout "$_xwb_limit" "$_xwb_wget" "$@"
         return $?
     fi
-    # BusyBox wget's -T sets a network read timeout; callers also pass -t 1,
-    # so do not disable downloads solely because the timeout applet is absent.
+    # Если timeout отсутствует, сохраняем сетевой тайм-аут -T и доступное
+    # ограничение повторов вместо отключения загрузчика.
     "$_xwb_wget" "$@"
     return $?
 }
@@ -3150,7 +3086,7 @@ xmenu_fetch_file() {
         rm -f "$_xmf_out"
         if [ -z "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
             # -T controls read/connect timeout; -t 1 prevents wget retrying forever.
-            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -t 1 -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
+            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
             if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
         fi
         rm -f "$_xmf_out"
@@ -3160,7 +3096,7 @@ xmenu_fetch_file() {
     if [ -n "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
         for _xmf_candidate in $_xmf_candidates; do
             rm -f "$_xmf_out"
-            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -t 1 -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
+            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
             if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
             rm -f "$_xmf_out"
         done
@@ -3309,7 +3245,7 @@ check_xmenu_update_now() {
 
 xmenu_update_check_worker() {
     _xuw_parent=$1
-    _xuw_tmp="$ROOT_DIR/xmenu-update-cache.tmp"
+    _xuw_tmp="$ROOT_DIR/.xmenu-update-cache.$_xuw_parent"
     _xuw_version=$(xmenu_remote_version_probe 2>/dev/null) || _xuw_version=unknown
     {
         printf 'checked=%s\n' "$(date +%s 2>/dev/null || printf 0)"
@@ -3363,6 +3299,8 @@ xmenu_read_menu_prompt() {
             printf '%b' "${_xrmp_prompt}"
         fi
         read_uptime_tenths && _xrmp_before_ticks=$_uptime_tenths || _xrmp_before_ticks=''
+        # BusyBox ash поддерживает -t; ниже предусмотрен обычный read для других sh.
+        # shellcheck disable=SC3045
         IFS= read -r -t 1 _read_value </dev/tty
         _xrmp_rc=$?
         read_uptime_tenths && _xrmp_after_ticks=$_uptime_tenths || _xrmp_after_ticks=''
@@ -3478,7 +3416,8 @@ update_xmenu_script() {
     chmod 700 "$_ux_target" 2>/dev/null || :
     rm -f "$XMENU_UPDATE_CACHE"
     say "${GREEN}Xmenu обновлён до v$_ux_remote_version. Перезапускаю новое меню...${RESET}"
-    release_menu_session_lock
+    stop_component_status_refresh
+    xmenu_stop_update_check
     exec "$_ux_target"
 }
 
@@ -3507,15 +3446,14 @@ XMENU_ENTWARE_MIRRORS_EOF
 xmenu_opkg_mirror_info_by_id() {
     _omi_want=$1
     xmenu_opkg_mirrors_ensure_config || return 1
-    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region; do
+    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region || [ -n "$_omi_id" ]; do
         case "$_omi_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         case "$_omi_url" in http://*|https://*) : ;; *) continue ;; esac
         case "$_omi_url" in *[!A-Za-z0-9:/._-]*) continue ;; esac
         [ "$_omi_id" = "$_omi_want" ] || continue
-        XMENU_MIRROR_ID=$_omi_id
         XMENU_MIRROR_NAME=$_omi_name
         XMENU_MIRROR_URL=${_omi_url%/}
-        XMENU_MIRROR_REGION=$_omi_region
+        XMENU_MIRROR_REGION=$(printf '%s' "$_omi_region" | tr -d '\r')
         return 0
     done < "$XMENU_OPKG_MIRRORS_FILE"
     return 1
@@ -3524,15 +3462,14 @@ xmenu_opkg_mirror_info_by_id() {
 xmenu_opkg_mirror_info_by_url() {
     _omi_want=${1%/}
     xmenu_opkg_mirrors_ensure_config || return 1
-    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region; do
+    while IFS='|' read -r _omi_id _omi_name _omi_url _omi_region || [ -n "$_omi_id" ]; do
         case "$_omi_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         case "$_omi_url" in http://*|https://*) : ;; *) continue ;; esac
         case "$_omi_url" in *[!A-Za-z0-9:/._-]*) continue ;; esac
         [ "${_omi_url%/}" = "$_omi_want" ] || continue
-        XMENU_MIRROR_ID=$_omi_id
         XMENU_MIRROR_NAME=$_omi_name
         XMENU_MIRROR_URL=$_omi_want
-        XMENU_MIRROR_REGION=$_omi_region
+        XMENU_MIRROR_REGION=$(printf '%s' "$_omi_region" | tr -d '\r')
         return 0
     done < "$XMENU_OPKG_MIRRORS_FILE"
     return 1
@@ -3549,6 +3486,7 @@ xmenu_opkg_first_catalog_source_url() {
             while ((getline cfg < mirrors) > 0) {
                 n=split(cfg, f, "|")
                 if (n < 4 || f[1] !~ /^[0-9]+$/ || f[3] !~ /^https?:\/\//) continue
+                sub(/\/+$/, "", f[3])
                 rest=f[3]; sub(/^https?:\/\//, "", rest)
                 host=rest; sub(/\/.*/, "", host)
                 prefix=substr(rest, length(host)+1)
@@ -3585,7 +3523,8 @@ xmenu_opkg_feed_path() {
     _ofp_host=${_ofp_rest%%/*}
     _ofp_path=${_ofp_rest#"$_ofp_host"}
     [ "$_ofp_path" != "$_ofp_rest" ] || _ofp_path='/'
-    while IFS='|' read -r _ofp_id _ofp_name _ofp_base _ofp_region; do
+    while IFS='|' read -r _ofp_id _ofp_name _ofp_base _ofp_region || [ -n "$_ofp_id" ]; do
+        _ofp_base=${_ofp_base%/}
         case "$_ofp_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         case "$_ofp_base" in http://*|https://*) : ;; *) continue ;; esac
         _ofp_base_rest=${_ofp_base#*://}
@@ -3614,6 +3553,14 @@ xmenu_opkg_mirror_label() {
 }
 
 xmenu_opkg_set_mirror() {
+    acquire_lock || return 1
+    xmenu_opkg_set_mirror_locked "$1"
+    _osm_apply_rc=$?
+    release_operation_lock
+    return "$_osm_apply_rc"
+}
+
+xmenu_opkg_set_mirror_locked() {
     _osm_base=$1
     xmenu_opkg_mirror_info_by_url "$_osm_base" || { say "${RED}Зеркало отсутствует в каталоге Entware; изменение отменено.${RESET}"; return 2; }
     _osm_conf=/opt/etc/opkg.conf
@@ -3632,7 +3579,7 @@ xmenu_opkg_set_mirror() {
                 prefix=mirror_prefix[i]
                 if (prefix != "" && prefix != "/") {
                     if (path == prefix) path="/"
-                    else if (index(path, prefix "/") == 1) sub("^" prefix, "", path)
+                    else if (index(path, prefix "/") == 1) path=substr(path, length(prefix)+1)
                     else return ""
                 }
                 if (path == "") path="/"
@@ -3645,6 +3592,7 @@ xmenu_opkg_set_mirror() {
             while ((getline cfgline < mirrors) > 0) {
                 n=split(cfgline, fields, "|")
                 if (n < 4 || fields[1] !~ /^[0-9]+$/ || fields[3] !~ /^https?:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._-]*)?$/) continue
+                sub(/\/+$/, "", fields[3])
                 rest=fields[3]; sub(/^https?:\/\//, "", rest)
                 host=rest; sub(/\/.*$/, "", host)
                 prefix=substr(rest, length(host)+1)
@@ -3701,7 +3649,8 @@ xmenu_opkg_active_mirror_url() {
     _oam_host=${_oam_rest%%/*}
     _oam_path=${_oam_rest#"$_oam_host"}
     [ "$_oam_path" != "$_oam_rest" ] || _oam_path='/'
-    while IFS='|' read -r _oam_id _oam_name _oam_base _oam_region; do
+    while IFS='|' read -r _oam_id _oam_name _oam_base _oam_region || [ -n "$_oam_id" ]; do
+        _oam_base=${_oam_base%/}
         case "$_oam_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         _oam_base_rest=${_oam_base#*://}
         _oam_base_host=${_oam_base_rest%%/*}
@@ -3721,12 +3670,20 @@ xmenu_opkg_active_mirror_url() {
 # перехватчик может вернуть страницу блокировки с кодом 200.
 xmenu_opkg_is_packages_index() {
     [ -s "$1" ] || return 1
-    gzip -t "$1" >/dev/null 2>&1
+    gzip -t "$1" >/dev/null 2>&1 || return 1
+    # Gzip-страница блокировки тоже является архивом: нужны поля пакета OPKG.
+    gzip -dc "$1" 2>/dev/null | awk '
+        /^Package:[[:space:]]+[^[:space:]]/ {package=1}
+        /^Version:[[:space:]]+[^[:space:]]/ {version=1}
+        /^[[:space:]]*$/ {if (package && version) valid=1; package=0; version=0}
+        END {exit(valid || (package && version) ? 0 : 1)}
+    '
 }
 
 # Ответ: доступно|задержка-мс|HTTP-код или причина. В режиме auto выполняем одну повторную
 # попытку; в интерактивном списке проверяем один раз, чтобы не задерживать UI.
 xmenu_opkg_probe_mirror() {
+    command -v gzip >/dev/null 2>&1 || { printf 'unavailable||no-gzip'; return 0; }
     _opm_base=${1%/}
     _opm_feed=${2#/}
     _opm_attempts=${3:-1}
@@ -3755,20 +3712,25 @@ xmenu_opkg_probe_mirror() {
                 printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
                 return 0
             fi
-            case "$_opm_code" in
-                2??) _opm_code="invalid-index-http-$_opm_code" ;;
+            case "$_opm_rc:$_opm_code" in
+                28:*) _opm_code='timeout' ;;
+                0:2??) _opm_code="invalid-index-http-$_opm_code" ;;
+                *) case "$_opm_code" in
                 ''|000) _opm_code='000' ;;
                 *) _opm_code="http-$_opm_code" ;;
+                esac ;;
             esac
-        elif [ -n "$_opm_wget" ] && [ -x "$_opm_wget" ]; then
+        fi
+        # При сбое curl пробуем wget: поддержка TLS у этих сборок может различаться.
+        if [ -n "$_opm_wget" ] && [ -x "$_opm_wget" ]; then
             # Совместимый с BusyBox wget-путь: обычное скачивание, как раньше.
-            if "$_opm_wget" -q -T 6 -O "$_opm_tmp" "$_opm_url" 2>/dev/null && xmenu_opkg_is_packages_index "$_opm_tmp"; then
+            if xmenu_wget_bounded 6 "$_opm_wget" -q -T 6 -O "$_opm_tmp" "$_opm_url" 2>/dev/null && xmenu_opkg_is_packages_index "$_opm_tmp"; then
                 rm -f "$_opm_tmp"
                 printf 'available|999999|200'
                 return 0
             fi
-            _opm_code='download-or-invalid-index'
-        else
+            [ -n "${_opm_code:-}" ] || _opm_code='download-or-invalid-index'
+        elif [ -z "$_opm_curl" ]; then
             printf 'unavailable||no-transport'
             return 0
         fi
@@ -3784,16 +3746,18 @@ xmenu_opkg_probe_all() {
     _opa_feed=$(xmenu_opkg_feed_path) || return 1
     _opa_cache="$ROOT_DIR/opkg-mirrors-status.cache"
     _opa_now=$(date +%s 2>/dev/null || printf 0)
+    case "$_opa_now" in ''|*[!0-9]*) _opa_now=0 ;; esac
     if [ "$_opa_force" != 1 ] && [ -r "$_opa_cache" ]; then
         _opa_checked=$(sed -n 's/^checked=//p' "$_opa_cache" | sed -n '1p')
         _opa_cached_feed=$(sed -n 's/^feed=//p' "$_opa_cache" | sed -n '1p')
         case "$_opa_checked" in ''|*[!0-9]*) _opa_checked=0 ;; esac
-        if [ "$_opa_cached_feed" = "$_opa_feed" ] && [ $((_opa_now - _opa_checked)) -ge 0 ] 2>/dev/null && [ $((_opa_now - _opa_checked)) -lt 60 ] 2>/dev/null; then return 0; fi
+        _opa_checker=$(sed -n 's/^checker=//p' "$_opa_cache" | sed -n '1p')
+        if [ "$_opa_checker" = 3 ] && [ "$_opa_cached_feed" = "$_opa_feed" ] && [ $((_opa_now - _opa_checked)) -ge 0 ] 2>/dev/null && [ $((_opa_now - _opa_checked)) -lt 60 ] 2>/dev/null; then return 0; fi
     fi
     _opa_tmp="$_opa_cache.tmp.$$"
     {
-        printf 'checked=%s\nfeed=%s\n' "$_opa_now" "$_opa_feed"
-        while IFS='|' read -r _opa_id _opa_name _opa_base _opa_region; do
+        printf 'checker=3\nchecked=%s\nfeed=%s\n' "$_opa_now" "$_opa_feed"
+        while IFS='|' read -r _opa_id _opa_name _opa_base _opa_region || [ -n "$_opa_id" ]; do
             case "$_opa_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
             case "$_opa_base" in http://*|https://*) : ;; *) continue ;; esac
             case "$_opa_base" in *[!A-Za-z0-9:/._-]*) continue ;; esac
@@ -3803,6 +3767,51 @@ xmenu_opkg_probe_all() {
     } > "$_opa_tmp" 2>/dev/null || { rm -f "$_opa_tmp"; return 1; }
     mv -f "$_opa_tmp" "$_opa_cache" || { rm -f "$_opa_tmp"; return 1; }
     return 0
+}
+
+xmenu_opkg_show_active_repository() {
+    _osar_lang=$1
+    _osar_source=$(xmenu_opkg_first_catalog_source_url 2>/dev/null || :)
+    _osar_base=$(xmenu_opkg_active_mirror_url 2>/dev/null || :)
+    if [ -n "$_osar_base" ] && xmenu_opkg_mirror_info_by_url "$_osar_base"; then
+        _osar_label="✓ $XMENU_MIRROR_NAME ($XMENU_MIRROR_REGION)"
+    else
+        _osar_source=$(awk '($1=="src/gz" || $1=="src") && NF>=3 {print $3; exit}' /opt/etc/opkg.conf 2>/dev/null)
+        if [ "$_osar_lang" = en ]; then _osar_label='Custom repository'; else _osar_label='Пользовательский репозиторий'; fi
+    fi
+    if [ -z "$_osar_source" ]; then
+        if [ "$_osar_lang" = en ]; then say "${YELLOW}No package source found in opkg.conf.${RESET}"
+        else say "${YELLOW}В opkg.conf не найден источник пакетов.${RESET}"; fi
+    else
+        if [ "$_osar_lang" = en ]; then say "  Current: ${ACTIVE}$_osar_label${RESET}"
+        else say "  Текущий: ${ACTIVE}$_osar_label${RESET}"; fi
+        say "  URL:     ${ACTIVE}$_osar_source${RESET}"
+    fi
+    return 0
+}
+
+xmenu_opkg_probe_reason() {
+    _opr_code=$1
+    _opr_lang=$2
+    if [ "$_opr_lang" = en ]; then
+        case "$_opr_code" in
+            http-*) printf 'Server returned HTTP %s.' "${_opr_code#http-}" ;;
+            invalid-index-*) printf 'Response is not a valid OPKG package index.' ;;
+            timeout) printf 'Download timed out.' ;;
+            no-gzip) printf 'gzip is required to validate package indexes.' ;;
+            no-transport) printf 'Neither curl nor wget is available.' ;;
+            *) printf 'Could not download and validate the package index.' ;;
+        esac
+    else
+        case "$_opr_code" in
+            http-*) printf 'Сервер вернул HTTP %s.' "${_opr_code#http-}" ;;
+            invalid-index-*) printf 'Ответ не является корректным индексом пакетов OPKG.' ;;
+            timeout) printf 'Истекло время ожидания загрузки.' ;;
+            no-gzip) printf 'Для проверки индекса нужна команда gzip.' ;;
+            no-transport) printf 'Не найдены curl и wget.' ;;
+            *) printf 'Не удалось скачать и проверить индекс пакетов.' ;;
+        esac
+    fi
 }
 
 xmenu_opkg_check_mirrors() {
@@ -3822,16 +3831,18 @@ xmenu_opkg_check_mirrors() {
     if [ "$_ocm_lang" = en ]; then
         say "${WHITE}◆ ENTWARE REPOSITORIES${RESET}"
         say 'The Packages.gz content is verified; blocking pages count as unavailable.'
-        [ -n "$_ocm_active" ] && say "Current repository: ${CYAN}$_ocm_active${RESET}"
+        [ -n "$_ocm_active" ] && say "Current repository: ${ACTIVE}$_ocm_active${RESET}"
     else
         say "${WHITE}◆ РЕПОЗИТОРИИ ENTWARE / OPKG${RESET}"
         say 'Проверяется содержимое Packages.gz; страницы блокировки считаются недоступностью.'
-        [ -n "$_ocm_active" ] && say "Текущий репозиторий: ${CYAN}$_ocm_active${RESET}"
+        [ -n "$_ocm_active" ] && say "Текущий репозиторий: ${ACTIVE}$_ocm_active${RESET}"
     fi
     line
     _ocm_available=0
     _ocm_total=0
-    while IFS='|' read -r _ocm_id _ocm_name _ocm_base _ocm_region; do
+    while IFS='|' read -r _ocm_id _ocm_name _ocm_base _ocm_region || [ -n "$_ocm_id" ]; do
+        _ocm_base=${_ocm_base%/}
+        _ocm_region=${_ocm_region%"$(printf '\r')"}
         case "$_ocm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         case "$_ocm_base" in http://*|https://*) : ;; *) continue ;; esac
         _ocm_total=$((_ocm_total + 1))
@@ -3855,9 +3866,16 @@ xmenu_opkg_check_mirrors() {
             *) if [ "$_ocm_lang" = en ]; then _ocm_status="${RED}● unavailable${RESET}"; _ocm_time='—'
                else _ocm_status="${RED}● недоступно${RESET}"; _ocm_time='—'; fi ;;
         esac
-        if [ "$_ocm_state" != available ] && [ -n "$_ocm_reason" ]; then say "      Результат проверки: $_ocm_reason"; fi
-        say "  $_ocm_status  $_ocm_name [$_ocm_region] — $_ocm_time$_ocm_marker"
+        if [ -n "$_ocm_marker" ]; then
+            say "  $_ocm_status  ${ACTIVE}$_ocm_name [$_ocm_region] — $_ocm_time$_ocm_marker${RESET}"
+        else
+            say "  $_ocm_status  $_ocm_name [$_ocm_region] — $_ocm_time"
+        fi
         say "      URL: ${_ocm_base%/}"
+        if [ "$_ocm_state" != available ] && [ -n "$_ocm_reason" ]; then
+            say "      $(xmenu_opkg_probe_reason "$_ocm_reason" "$_ocm_lang")"
+        fi
+        say ''
     done < "$XMENU_OPKG_MIRRORS_FILE"
     line
     if [ "$_ocm_lang" = en ]; then say "Available repositories: ${GREEN}$_ocm_available${RESET} / $_ocm_total"
@@ -3869,12 +3887,12 @@ xmenu_opkg_auto_select_mirror() {
     _oas_feed=$(xmenu_opkg_feed_path) || { say "${RED}Не удалось определить путь репозитория. Проверь /opt/etc/opkg.conf.${RESET}"; return 1; }
     _oas_lang=$(get_ui_lang)
     if [ "$_oas_lang" = en ]; then say 'Testing repository response time (one retry on connection failure)…'
-    else say 'Проверяю скорость зеркал (одна повторная попытка при ошибке связи)…'; fi
+    else say 'Ищу доступное зеркало (при ошибке - повторная попытка)..'; fi
     xmenu_opkg_probe_all 1 2 || { say "${RED}Не удалось проверить репозитории. Проверь URL в /opt/etc/opkg.conf и подключение к интернету.${RESET}"; return 1; }
     _oas_cache="$ROOT_DIR/opkg-mirrors-status.cache"
     _oas_best_id=''
     _oas_best_ms=2147483647
-    while IFS='|' read -r _oas_id _oas_name _oas_base _oas_region; do
+    while IFS='|' read -r _oas_id _oas_name _oas_base _oas_region || [ -n "$_oas_id" ]; do
         case "$_oas_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
         _oas_row=$(awk -F '|' -v id="$_oas_id" '$1=="mirror=" id {print substr($0, index($0, "|")+1); exit}' "$_oas_cache")
         _oas_state=${_oas_row%%|*}
@@ -3919,13 +3937,15 @@ xmenu_opkg_check_selected_mirror() {
     fi
 }
 
-xmenu_opkg_backup_config() {
-    _obc_conf=/opt/etc/opkg.conf
-    [ -r "$_obc_conf" ] || { say "Не найден $_obc_conf."; return 1; }
-    backup_file "$_obc_conf"
+xmenu_opkg_restore_config() {
+    acquire_lock || return 1
+    xmenu_opkg_restore_config_locked
+    _orc_apply_rc=$?
+    release_operation_lock
+    return "$_orc_apply_rc"
 }
 
-xmenu_opkg_restore_config() {
+xmenu_opkg_restore_config_locked() {
     _orc_conf=/opt/etc/opkg.conf
     _orc_latest=$(ls -1t "$BACKUP_DIR"/opkg.conf.*.bak 2>/dev/null | sed -n '1p')
     [ -n "$_orc_latest" ] && [ -r "$_orc_latest" ] || { say 'Резервная копия opkg.conf не найдена.'; return 1; }
@@ -3958,10 +3978,18 @@ xmenu_opkg_manual_mirror_menu() {
             _omm_test='Проверить выбранное зеркало'
             _omm_back='Назад'
         fi
-        while IFS='|' read -r _omm_id _omm_name _omm_url _omm_region; do
+        _omm_active=$(xmenu_opkg_active_mirror_url 2>/dev/null || :)
+        while IFS='|' read -r _omm_id _omm_name _omm_url _omm_region || [ -n "$_omm_id" ]; do
+            _omm_region=${_omm_region%"$(printf '\r')"}
             case "$_omm_id" in ''|\#*) continue ;; *[!0-9]*) continue ;; esac
             case "$_omm_url" in http://*|https://*) : ;; *) continue ;; esac
-            menu_item "$_omm_id" "$_omm_name — $_omm_region"
+            if [ "${_omm_url%/}" = "$_omm_active" ]; then
+                printf '%s' "$ACTIVE"
+                menu_item "$_omm_id" "✓ $_omm_name — $_omm_region"
+                printf '%s' "$RESET"
+            else
+                menu_item "$_omm_id" "$_omm_name — $_omm_region"
+            fi
         done < "$XMENU_OPKG_MIRRORS_FILE"
         menu_item R "$_omm_refresh"
         menu_item T "$_omm_test"
@@ -3991,42 +4019,40 @@ opkg_settings_menu() {
         line
         if [ "$_osm_lang" = en ]; then
             say "${WHITE}OPKG / Entware repositories${RESET}"
-            say 'Select or check an Entware repository.'
+            xmenu_opkg_show_active_repository en
+            line
             menu_item 1 'Auto-select available Entware repository'
             say '    Checks package indexes and chooses the fastest.'
             menu_item 2 'Check Entware mirror availability'
-            menu_item 3 'Choose Entware mirror manually'
-            say '    View the status, region and URL of each mirror.'
-            menu_item 4 'Back up current opkg.conf'
+            menu_item 3 'Choose Entware mirror manually - Status, region and URL of each mirror.'
+            menu_item 4 'Restore latest opkg.conf backup'
             menu_item 5 'Run opkg update'
-            menu_item 6 'Restore latest opkg.conf backup'
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
         else
             say "${WHITE}Репозитории OPKG / Entware${RESET}"
-            say 'Выбери действие с репозиториями Entware.'
+            xmenu_opkg_show_active_repository ru
+            line
             menu_item 1 'Авто-выбор доступного репозитория Entware'
             say '    Проверит индекс пакетов и выберет быстрое зеркало.'
             menu_item 2 'Проверить доступность зеркал Entware'
-            menu_item 3 'Выбрать зеркало Entware вручную'
-            say '    Статус, регион и адрес каждого зеркала.'
-            menu_item 4 'Создать копию текущего opkg.conf'
+            menu_item 3 'Выбрать зеркало Entware вручную -   Статус, регион и адрес каждого зеркала.'
+            menu_item 4 'Восстановить копию opkg.conf'
             menu_item 5 'Выполнить opkg update'
-            menu_item 6 'Восстановить копию opkg.conf'
             menu_item 0 'Назад'
             _osm_prompt='[?] Выбери пункт: '
         fi
+        line
         _read_or_eof "$_osm_prompt" || return 0
         case "$_read_value" in
             1) xmenu_opkg_auto_select_mirror; pause ;;
             2) xmenu_opkg_check_mirrors 1; pause ;;
             3) xmenu_opkg_manual_mirror_menu ;;
-            4) xmenu_opkg_backup_config; pause ;;
+            4) xmenu_opkg_restore_config; pause ;;
             5)
                 say 'opkg update обновляет индексы репозитория, но не установленные пакеты.'
                 confirm 'Выполнить opkg update?' && opkg update
                 pause ;;
-            6) xmenu_opkg_restore_config; pause ;;
             0|'') return 0 ;;
             *) say 'Неверный пункт.'; sleep 1 ;;
         esac
@@ -4739,6 +4765,7 @@ remove_menu() {
 
     # Stop this session's status worker before removing the directory that holds its lock.
     stop_component_status_refresh
+    xmenu_stop_update_check
     rm -f "$_c.next" "$_c"
     rm -f /opt/bin/xmenu /opt/bin/xmenu.bak*
 
@@ -4827,7 +4854,7 @@ main() {
             ensure_network || return 1
             strategy_menu
             return $? ;;
-        dpi-detector) launch_dpi; return $? ;;
+        dpi-detector) shift; launch_dpi "$@"; return $? ;;
         rkn-list) install_rkn_list; return $? ;;
         install-tg-ws-proxy-rust) install_tg_ws_proxy_rust; return $? ;;
         install-keenkit) install_keenkit; return $? ;;
@@ -4836,7 +4863,6 @@ main() {
         opkg-settings) opkg_settings_menu; return $? ;;
         *) : ;;
     esac
-    acquire_menu_session_lock || return 1
     # Проверка последней версии работает в фоне: меню не ждёт GitHub/зеркала и не зависит от opkg.
     xmenu_start_update_check || :
     # Первое открытие не запускает установку компонентов и не показывает предупреждений.
