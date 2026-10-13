@@ -36,6 +36,7 @@ XMENU_OPKG_MIRRORS_FILE="$ROOT_DIR/entware-mirrors.conf"
 XMENU_COMPONENT_CACHE="$ROOT_DIR/components-status.cache"
 XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components-status.cache.time"
 XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/.xmenu-component-refresh.lock"
+XMENU_COMPONENT_REFRESH_PENDING=0
 trap '[ "${XMENU_MANUAL_UPDATE_CHECK:-0}" = 1 ] || XMENU_UPDATE_REDRAW=1' USR1
 stop_component_status_refresh() {
     [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] || return 0
@@ -2724,6 +2725,7 @@ start_component_status_refresh() {
         return 1
     }
 
+    XMENU_COMPONENT_REFRESH_PENDING=1
     # The wrapper writes its own PID before exec, so the worker cannot finish
     # and remove the lock before check_pid has been published by the parent.
     sh -c '
@@ -3338,6 +3340,12 @@ xmenu_read_menu_prompt() {
 }
 
 xmenu_redraw_pending_update() {
+    # После первичной фоновой загрузки статусов перерисовываем меню с готовыми компонентами.
+    if [ "${XMENU_COMPONENT_REFRESH_PENDING:-0}" = 1 ] && component_status_cache_fresh; then
+        XMENU_COMPONENT_REFRESH_PENDING=0
+        render_menu
+        return 0
+    fi
     # Результат фоновой проверки показываем на месте под U, а не под приглашением.
     [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] && return 1
     _xrpu_latest=$(xmenu_cached_remote_version 2>/dev/null || :)
@@ -4775,6 +4783,7 @@ main() {
             if [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] &&
                [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ]; then
                 rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
+                case "$_xcrc_parent" in ''|*[!0-9]*|0) : ;; *) kill -USR1 "$_xcrc_parent" 2>/dev/null || : ;; esac
             fi
             return "$_xcrc_rc" ;;
         sync|update-strategies)

@@ -205,6 +205,18 @@ LC_ALL=C awk '/Xmenu ◆ v1.3.3/ {
   title_line && NR == title_line + 2 && $0 !~ /Модель:/ {exit 1}
 END {if (!found || !title_line) exit 1}' "$test_dir/plain-menu.txt" || fail 'title header must have 12-space indent followed by divider and model'
 
+# Первичное фоновое заполнение кеша должно перерисовать список компонентов.
+XMENU_COMPONENT_CACHE="$test_dir/components-status.cache"
+XMENU_COMPONENT_CACHE_TIME="$test_dir/components-status.cache.time"
+printf 'xkeen\t1.0\n' > "$XMENU_COMPONENT_CACHE"
+date +%s > "$XMENU_COMPONENT_CACHE_TIME"
+XMENU_COMPONENT_REFRESH_PENDING=1
+XMENU_UPDATE_NOTICE_VISIBLE=1
+render_menu() { printf 'COMPONENTS-REDRAW\n'; }
+xmenu_redraw_pending_update > "$test_dir/components-redraw.txt" || fail 'component refresh did not request redraw'
+grep -q COMPONENTS-REDRAW "$test_dir/components-redraw.txt" || fail 'component list was not redrawn after background refresh'
+test "$XMENU_COMPONENT_REFRESH_PENDING" = 0 || fail 'component redraw flag was not cleared'
+
 # Открытие двух меню не должно удерживать общий lock сессии.
 configure_locale() { return 0; }
 require_root() { return 0; }
