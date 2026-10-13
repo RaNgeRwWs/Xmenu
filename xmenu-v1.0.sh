@@ -3712,12 +3712,11 @@ xmenu_opkg_active_mirror_url() {
     return 1
 }
 
-# Проверяем начало настоящего gzip-индекса, а не только ответ хоста: перехватчики сети
-# часто возвращают страницу блокировки с HTTP 200.
+# Проверяем целостность всего gzip-индекса, а не только HTTP-ответ:
+# перехватчик может вернуть страницу блокировки с кодом 200.
 xmenu_opkg_is_packages_index() {
     [ -s "$1" ] || return 1
-    _opmi_magic=$(dd if="$1" bs=1 count=2 2>/dev/null | od -tx1 2>/dev/null | awk 'NR==1 {print $2 $3}' | tr -d '[:space:]')
-    [ "$_opmi_magic" = 1f8b ]
+    gzip -t "$1" >/dev/null 2>&1
 }
 
 # Ответ: доступно|задержка-мс|HTTP-код или причина. В режиме auto выполняем одну повторную
@@ -3737,30 +3736,33 @@ xmenu_opkg_probe_mirror() {
         _opm_tmp="/tmp/xmenu-mirror-probe-$$"
         rm -f "$_opm_tmp"
         if [ -n "$_opm_curl" ] && [ -x "$_opm_curl" ]; then
-            _opm_result=$("$_opm_curl" -L -sS --connect-timeout 3 --max-time 8 --range 0-1 -o "$_opm_tmp" -w '%{http_code}|%{time_total}' "$_opm_url" 2>/dev/null)
+            # Используем обычный GET как в прежней рабочей проверке Entware:
+            # некоторые зеркала и сборки curl на роутерах некорректно отвечают на Range.
+            _opm_result=$("$_opm_curl" -L -sS --fail --connect-timeout 3 --max-time 6 -o "$_opm_tmp" -w '%{http_code}|%{time_total}' "$_opm_url" 2>/dev/null)
             _opm_rc=$?
             _opm_code=${_opm_result%%|*}
             _opm_seconds=${_opm_result#*|}
+            if [ "$_opm_rc" -eq 0 ] && [ -s "$_opm_tmp" ] && xmenu_opkg_is_packages_index "$_opm_tmp"; then
+                case "$_opm_seconds" in ''|*[!0-9.]*|*.*.*) _opm_ms=999999 ;;
+                *) _opm_ms=$(awk -v t="$_opm_seconds" 'BEGIN {printf "%d", t * 1000}') ;;
+                esac
+                rm -f "$_opm_tmp"
+                printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
+                return 0
+            fi
             case "$_opm_code" in
-                2??)
-                    if [ "$_opm_rc" -eq 0 ] && xmenu_opkg_is_packages_index "$_opm_tmp"; then
-                        case "$_opm_seconds" in ''|*[!0-9.]*|*.*.*) _opm_ms=999999 ;;
-                        *) _opm_ms=$(awk -v t="$_opm_seconds" 'BEGIN {printf "%d", t * 1000}') ;;
-                        esac
-                        rm -f "$_opm_tmp"
-                        printf 'available|%s|%s' "$_opm_ms" "$_opm_code"
-                        return 0
-                    fi
-                    _opm_code="blocked-http-$_opm_code"
-                    ;;
+                2??) _opm_code="invalid-index-http-$_opm_code" ;;
+                ''|000) _opm_code='000' ;;
+                *) _opm_code="http-$_opm_code" ;;
             esac
         elif [ -n "$_opm_wget" ] && [ -x "$_opm_wget" ]; then
-            if "$_opm_wget" -q -T 8 -O "$_opm_tmp" --header='Range: bytes=0-1' "$_opm_url" 2>/dev/null && xmenu_opkg_is_packages_index "$_opm_tmp"; then
+            # Совместимый с BusyBox wget-путь: обычное скачивание, как раньше.
+            if "$_opm_wget" -q -T 6 -O "$_opm_tmp" "$_opm_url" 2>/dev/null && xmenu_opkg_is_packages_index "$_opm_tmp"; then
                 rm -f "$_opm_tmp"
                 printf 'available|999999|200'
                 return 0
             fi
-            _opm_code='blocked-or-invalid-index'
+            _opm_code='download-or-invalid-index'
         else
             printf 'unavailable||no-transport'
             return 0
@@ -3832,6 +3834,7 @@ xmenu_opkg_check_mirrors() {
         _ocm_state=${_ocm_row%%|*}
         _ocm_rest=${_ocm_row#*|}
         _ocm_ms=${_ocm_rest%%|*}
+        _ocm_reason=${_ocm_rest#*|}
         _ocm_host_url=${_ocm_base#*://}; _ocm_host=${_ocm_host_url%%/*}
         _ocm_marker=''
         [ "$_ocm_base" = "$_ocm_active" ] && { if [ "$_ocm_lang" = en ]; then _ocm_marker='  ✓ current'; else _ocm_marker='  ✓ текущее'; fi; }
@@ -3847,6 +3850,7 @@ xmenu_opkg_check_mirrors() {
             *) if [ "$_ocm_lang" = en ]; then _ocm_status="${RED}● unavailable${RESET}"; _ocm_time='—'
                else _ocm_status="${RED}● недоступно${RESET}"; _ocm_time='—'; fi ;;
         esac
+        if [ "$_ocm_state" != available ] && [ -n "$_ocm_reason" ]; then say "      Результат проверки: $_ocm_reason"; fi
         say "  $_ocm_status  $_ocm_name [$_ocm_region] — $_ocm_time$_ocm_marker"
         say "      URL: ${_ocm_base%/}"
     done < "$XMENU_OPKG_MIRRORS_FILE"
