@@ -49,7 +49,6 @@ stop_component_status_refresh() {
             _scsr_start=$(cat "$XMENU_COMPONENT_REFRESH_LOCK/check_start" 2>/dev/null || :)
             if [ "$_scsr_worker" != "$$" ] && xmenu_lock_pid_is_owner "$_scsr_worker" "$_scsr_start"; then
                 kill "$_scsr_worker" 2>/dev/null || :
-                wait "$_scsr_worker" 2>/dev/null || :
             fi ;;
     esac
     rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
@@ -611,7 +610,7 @@ rci_json() {
     if command -v curl >/dev/null 2>&1; then
         _rci=$(curl -fLsS --connect-timeout 1 --max-time 2 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
     elif command -v wget >/dev/null 2>&1; then
-        _rci=$(wget -qO- -T 2 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
+        _rci=$(xmenu_wget_bounded 2 "$(command -v wget)" -qO- -T 2 http://127.0.0.1:79/rci/show/version 2>/dev/null) || _rci=''
     fi
     [ -n "$_rci" ] && printf '%s\n' "$_rci"
 }
