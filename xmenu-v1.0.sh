@@ -386,17 +386,17 @@ transport_has_tls() {
     if [ -n "$_wget_path" ] && [ -x "$_wget_path" ]; then
         for _probe_url in $_probe_urls; do
             if "$_wget_path" --help 2>&1 | grep -q -- '--spider'; then
-                if "$_wget_path" -q --spider -T 8 "$_probe_url" >/dev/null 2>&1; then
+                if xmenu_wget_bounded 8 "$_wget_path" -q --spider -T 8 "$_probe_url" >/dev/null 2>&1; then
                     _TRANSPORT_TLS_CACHED=yes
                     return 0
                 fi
             else
-                if "$_wget_path" -q -T 8 -O /dev/null --header='Range: bytes=0-1023' "$_probe_url" >/dev/null 2>&1; then
+                if xmenu_wget_bounded 8 "$_wget_path" -q -T 8 -O /dev/null --header='Range: bytes=0-1023' "$_probe_url" >/dev/null 2>&1; then
                     _TRANSPORT_TLS_CACHED=yes
                     return 0
                 fi
                 # Совместимый запасной вариант для wget без поддержки Range.
-                if "$_wget_path" -q -T 8 -O /dev/null "$_probe_url" >/dev/null 2>&1; then
+                if xmenu_wget_bounded 8 "$_wget_path" -q -T 8 -O /dev/null "$_probe_url" >/dev/null 2>&1; then
                     _TRANSPORT_TLS_CACHED=yes
                     return 0
                 fi
@@ -530,7 +530,7 @@ fetch() {
         if [ "$_fetch_ok" -ne 1 ]; then
             rm -f "$_fetch_out"
             _wget_path=$(command -v wget 2>/dev/null || printf '')
-            if [ -n "$_wget_path" ] && [ -x "$_wget_path" ] && "$_wget_path" -q -T "$_fetch_timeout" -O "$_fetch_out" "$_fetch_candidate"; then
+            if [ -n "$_wget_path" ] && [ -x "$_wget_path" ] && xmenu_wget_bounded "$_fetch_timeout" "$_wget_path" -q -T "$_fetch_timeout" -O "$_fetch_out" "$_fetch_candidate"; then
                 [ -s "$_fetch_out" ] && _fetch_ok=1
             fi
         fi
@@ -3091,20 +3091,22 @@ xmenu_fetch_file() {
     for _xmf_candidate in $_xmf_candidates; do
         rm -f "$_xmf_out"
         if [ -n "$_xmf_curl" ] && [ -x "$_xmf_curl" ]; then
+            _xmf_rc=0
             if [ -n "$_xmf_range" ]; then
                 "$_xmf_curl" -fLsS --connect-timeout 4 --max-time "$_xmf_timeout" \
-                    --range "$_xmf_range" -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || :
+                    --range "$_xmf_range" -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || _xmf_rc=$?
             else
                 "$_xmf_curl" -fLsS --connect-timeout 4 --max-time "$_xmf_timeout" \
-                    -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || :
+                    -o "$_xmf_out" "$_xmf_candidate" 2>/dev/null || _xmf_rc=$?
             fi
-            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+            # Непустой файл после тайм-аута может быть только обрывком ответа.
+            if [ "$_xmf_rc" -eq 0 ] && [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
         fi
         rm -f "$_xmf_out"
         if [ -z "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
             # -T controls read/connect timeout; -t 1 prevents wget retrying forever.
-            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
-            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+            if xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 &&
+               [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
         fi
         rm -f "$_xmf_out"
     done
@@ -3113,8 +3115,8 @@ xmenu_fetch_file() {
     if [ -n "$_xmf_curl" ] && [ -n "$_xmf_wget" ] && [ -x "$_xmf_wget" ]; then
         for _xmf_candidate in $_xmf_candidates; do
             rm -f "$_xmf_out"
-            xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 || :
-            if [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
+            if xmenu_wget_bounded "$_xmf_timeout" "$_xmf_wget" -q -T "$_xmf_timeout" -O "$_xmf_out" "$_xmf_candidate" >/dev/null 2>&1 &&
+               [ -s "$_xmf_out" ] && ! response_looks_like_error_page "$_xmf_out"; then return 0; fi
             rm -f "$_xmf_out"
         done
     fi

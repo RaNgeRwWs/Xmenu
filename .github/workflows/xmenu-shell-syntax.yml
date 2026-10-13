@@ -26,5 +26,7 @@ jobs:
         run: shellcheck -s sh -S warning xmenu-v1.0.sh
       - name: Run regression scenarios in BusyBox ash
         run: busybox ash tests/regression.sh
+      - name: Run deep audit regression scenarios
+        run: busybox ash tests/audit_regression.sh
       - name: Check interactive menu input in PTY
         run: python3 tests/menu_input.py
