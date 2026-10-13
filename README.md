@@ -15,33 +15,60 @@ XKeen · Xray / Mihomo · NFQWS / NFQWS2 · стратегии · OPKG · диа
 
 ## Быстрый старт
 
-Подключись к роутеру по SSH под `root`. Нужны Entware в `/opt`, `curl` и рабочая сеть. Каждый блок ниже — самостоятельный способ загрузить один и тот же скрипт.
+Подключись к роутеру по SSH под `root`. Нужны Entware в `/opt` и доступ в интернет. Выбери один из способов загрузки ниже. Перед заменой установленной версии команда сохраняет её резервную копию.
 
 ### 1. GitHub Raw — основной адрес
 
 ```sh
-mkdir -p /opt/bin && curl -fL --retry 3 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
+mkdir -p /opt/bin
+curl -fL --retry 3 \
+  'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' \
+  -o /tmp/xmenu.sh &&
+sh -n /tmp/xmenu.sh &&
+{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
+cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
+/opt/bin/xmenu
 ```
 
 ### 2. GitHub Raw через `wget`
 
 ```sh
-mkdir -p /opt/bin && wget -O /tmp/xmenu.sh 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
+mkdir -p /opt/bin
+wget -O /tmp/xmenu.sh \
+  'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' &&
+sh -n /tmp/xmenu.sh &&
+{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
+cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
+/opt/bin/xmenu
 ```
 
 ### 3. jsDelivr — зеркало GitHub
 
 ```sh
-mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
+mkdir -p /opt/bin
+curl -fL --retry 3 \
+  'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' \
+  -o /tmp/xmenu.sh &&
+sh -n /tmp/xmenu.sh &&
+{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
+cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
+/opt/bin/xmenu
 ```
 
 ### 4. ghproxy — дополнительный маршрут
 
 ```sh
-mkdir -p /opt/bin && curl -fL --retry 3 'https://ghproxy.net/https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu && /opt/bin/xmenu
+mkdir -p /opt/bin
+curl -fL --retry 3 \
+  'https://ghproxy.net/https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' \
+  -o /tmp/xmenu.sh &&
+sh -n /tmp/xmenu.sh &&
+{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
+cp /tmp/xmenu.sh /opt/bin/xmenu && chmod 700 /opt/bin/xmenu &&
+/opt/bin/xmenu
 ```
 
-Каждая команда сначала проверяет синтаксис загруженного скрипта, затем сохраняет прежний `/opt/bin/xmenu` и запускает новую копию. Для способов 1, 3 и 4 нужен `curl`; если он не установлен, выполни `opkg update && opkg install curl`. Для способа 2 нужен `wget`. При проблеме с одним адресом попробуй следующий.
+Все способы проверяют синтаксис скрипта до установки. Для вариантов 1, 3 и 4 нужен `curl`, для варианта 2 — `wget`. Установить недостающий инструмент можно так: `opkg update && opkg install curl wget`. Если один адрес недоступен, выбери следующий.
 
 После установки меню открывается командой:
 
@@ -53,6 +80,7 @@ xmenu
 
 ## Содержание
 
+- [Быстрый старт](#быстрый-старт)
 - [Возможности](#возможности)
 - [Требования](#требования)
 - [Главное меню](#главное-меню)
@@ -73,17 +101,17 @@ Xmenu объединяет установщики и повседневные д
 |---|---|
 | **Установка** | XKeen Stable, XKeen UI, nfqws2, nfqws-web-keenetic, nfqws2-ui и готовые профили с Xray или Mihomo. |
 | **NFQWS** | Выбор стратегии, проверка и загрузка нужных blobs/lists, установка blobs NFQWS2 и загрузка `rkn.list`. |
-| **Утилиты** | DPI Detector, TG WS Proxy Rust, KeenKit и awg-manager. Некоторые действия выполняются через проверенную временную копию `nfqws-menu`. |
+| **Утилиты** | DPI Detector, TG WS Proxy Rust, KeenKit и awg-manager. |
 | **Entware / OPKG** | Автоматический поиск доступного зеркала, проверка индексов, ручное переключение, восстановление `opkg.conf` и `opkg update`. |
 | **Обслуживание** | Удаление выбранных компонентов, очистка резервных файлов и blobs, диагностика и смена языка RU / EN. |
 
 В верхней части меню отображаются модель, KeeneticOS, архитектура и найденные компоненты. Проверка обновления Xmenu выполняется в фоне; доступное обновление показывается бирюзовой строкой под пунктом `U`.
 
-### Пример блока состояния `nfqws-menu`
+### Пример интерфейса
 
-На изображении показано отдельное связанное меню `nfqws-menu`, которое Xmenu использует для некоторых утилит. Это пример его блока состояния и экрана установки, а не снимок главного меню Xmenu.
+Пример экрана состояния и установки компонентов:
 
-![Пример блока состояния и установки в nfqws-menu](docs/images/nfqws-menu-status-example.png)
+![Пример блока состояния и установки](docs/images/status-screen.png)
 
 ## Требования
 
@@ -125,9 +153,9 @@ Xmenu не устанавливает Entware и модули ядра авто�
   0     Выход
 ```
 
-Пример компоновки другого связанного инструмента `nfqws-menu` приведён ниже. Он показывает группировку пунктов и отступы; интерфейс Xmenu имеет собственную нумерацию и набор разделов.
+Пример группировки пунктов и отступов в консольном меню:
 
-![Пример структуры меню nfqws-menu](docs/images/nfqws-menu-layout-example.png)
+![Пример структуры консольного меню](docs/images/menu-screen.png)
 
 `U` в приглашении меню запускает немедленную проверку новой версии Xmenu. Она не устанавливает обновление: для установки выбери пункт **22**. В главном меню Xmenu можно одновременно работать из нескольких SSH-сессий; одновременная запись настроек сериализуется на время операции.
 
@@ -203,9 +231,9 @@ xmenu backup          # создать архив конфигураций
 ├── xmenu-v1.0.sh                 основной POSIX sh / BusyBox ash скрипт
 ├── README.md                     установка и справочник пользователя
 ├── CHANGELOG.md                  история изменений
-├── docs/images/                  примеры интерфейса nfqws-menu
-│   ├── nfqws-menu-status-example.png
-│   └── nfqws-menu-layout-example.png
+├── docs/images/                  примеры экранов интерфейса
+│   ├── status-screen.png
+│   └── menu-screen.png
 ├── tests/regression.sh           сценарии регрессии с временными конфигами
 ├── tests/menu_input.py           проверка ввода в PTY
 └── .github/workflows/             CI: синтаксис, ShellCheck и регрессии
