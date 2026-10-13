@@ -2257,61 +2257,86 @@ release_menu_session_lock() {
     [ "$MENU_SESSION_LOCK_HELD" = 1 ] && [ -d "$MENU_SESSION_LOCK_DIR" ] || return 0
     _menu_release_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
     if [ "$_menu_release_pid" = "$$" ]; then
-        rm -f "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :
+        rm -f "$MENU_SESSION_LOCK_DIR/pid" "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :
         rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || rm -rf "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
     fi
     MENU_SESSION_LOCK_HELD=0
 }
 
+menu_session_process_start() {
+    [ -r "/proc/$1/stat" ] || return 1
+    # После удаления имени процесса в скобках starttime — поле 20.
+    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+}
+
+menu_session_process_state() {
+    [ -r "/proc/$1/stat" ] || return 1
+    sed 's/^[^)]*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $1}'
+}
+
+menu_session_lock_owner_is_stale() {
+    _mslo_pid=$1
+    _mslo_recorded_start=$(cat "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :)
+    _mslo_actual_start=$(menu_session_process_start "$_mslo_pid" 2>/dev/null || :)
+    if [ -n "$_mslo_actual_start" ]; then
+        _mslo_state=$(menu_session_process_state "$_mslo_pid" 2>/dev/null || :)
+        case "$_mslo_state" in Z|X) return 0 ;; esac
+        if [ -n "$_mslo_recorded_start" ]; then
+            [ "$_mslo_actual_start" != "$_mslo_recorded_start" ]
+            return $?
+        fi
+        # Старые версии Xmenu сохраняли только PID. Для такого lock проверяем,
+        # что PID всё ещё принадлежит процессу Xmenu, а не другому процессу.
+        _mslo_cmdline=$(tr '\000' ' ' < "/proc/$_mslo_pid/cmdline" 2>/dev/null || :)
+        case "$_mslo_cmdline" in *xmenu*) return 1 ;; *) return 0 ;; esac
+    fi
+    ! kill -0 "$_mslo_pid" 2>/dev/null
+}
+
+menu_session_lock_publish() {
+    MENU_SESSION_LOCK_HELD=1
+    _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
+    printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
+        mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
+            rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
+            rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
+            MENU_SESSION_LOCK_HELD=0
+            return 1
+        }
+    _menu_lock_start=$(menu_session_process_start "$$" 2>/dev/null || :)
+    if [ -n "$_menu_lock_start" ]; then
+        printf '%s\n' "$_menu_lock_start" > "$MENU_SESSION_LOCK_DIR/start" 2>/dev/null || :
+    fi
+    return 0
+}
+
 acquire_menu_session_lock() {
     mkdir -p "$(dirname "$MENU_SESSION_LOCK_DIR")" || return 1
     if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
-        MENU_SESSION_LOCK_HELD=1
-        _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
-        printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
-            mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
-                rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
-                rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-                MENU_SESSION_LOCK_HELD=0
-                say 'Не удалось создать блокировку сессии Xmenu.'
-                return 1
-            }
+        menu_session_lock_publish || { say 'Не удалось создать блокировку сессии Xmenu.'; return 1; }
         return 0
     fi
     _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
-    case "$_menu_lock_pid" in
-        '')
-            # mkdir is atomic, but the winning process still needs a moment to
-            # publish its PID. Never remove an empty lock immediately: that
-            # race allowed two simultaneous launches to both enter the menu.
-            _menu_lock_wait=0
-            while [ "$_menu_lock_wait" -lt 10 ] && [ ! -s "$MENU_SESSION_LOCK_DIR/pid" ]; do
-                sleep 0.1
-                _menu_lock_wait=$((_menu_lock_wait + 1))
-            done
-            _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
-            ;;
-        *[!0-9]*) : ;;
-        *)
-            if ! kill -0 "$_menu_lock_pid" 2>/dev/null; then
-                rm -f "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :
-                rm -f "$MENU_SESSION_LOCK_DIR"/.pid.* 2>/dev/null || :
-                rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-                if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
-                    MENU_SESSION_LOCK_HELD=1
-                    _menu_lock_pid_tmp="$MENU_SESSION_LOCK_DIR/.pid.$$"
-                    printf '%s\n' "$$" > "$_menu_lock_pid_tmp" 2>/dev/null &&
-                        mv -f "$_menu_lock_pid_tmp" "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || {
-                            rm -f "$_menu_lock_pid_tmp" 2>/dev/null || :
-                            rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
-                            MENU_SESSION_LOCK_HELD=0
-                            return 1
-                        }
-                    return 0
-                fi
-            fi
-            ;;
+    case "$_menu_lock_pid" in ''|*[!0-9]*)
+        # Дайте процессу, который только что создал каталог, время записать PID.
+        _menu_lock_wait=0
+        while [ "$_menu_lock_wait" -lt 10 ] && [ ! -s "$MENU_SESSION_LOCK_DIR/pid" ]; do
+            sleep 0.1
+            _menu_lock_wait=$((_menu_lock_wait + 1))
+        done
+        _menu_lock_pid=$(cat "$MENU_SESSION_LOCK_DIR/pid" 2>/dev/null || :)
+        ;;
     esac
+    case "$_menu_lock_pid" in ''|*[!0-9]*) _menu_lock_stale=1 ;;
+        *) if menu_session_lock_owner_is_stale "$_menu_lock_pid"; then _menu_lock_stale=1; else _menu_lock_stale=0; fi ;;
+    esac
+    if [ "$_menu_lock_stale" = 1 ]; then
+        rm -f "$MENU_SESSION_LOCK_DIR/pid" "$MENU_SESSION_LOCK_DIR/start" "$MENU_SESSION_LOCK_DIR"/.pid.* 2>/dev/null || :
+        rmdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null || :
+        if mkdir "$MENU_SESSION_LOCK_DIR" 2>/dev/null; then
+            menu_session_lock_publish && return 0
+        fi
+    fi
     say 'Меню Xmenu уже открыто или запускается в другой SSH-сессии. Закрой его или дождись завершения.'
     return 1
 }
