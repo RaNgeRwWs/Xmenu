@@ -56,6 +56,8 @@ def check_startup(order, rows, columns):
         )
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+        env = os.environ.copy()
+        env["TERM"] = "xterm"
 
         def controlling_terminal():
             os.setsid()
@@ -63,10 +65,11 @@ def check_startup(order, rows, columns):
 
         process = subprocess.Popen(
             ["busybox", "ash", str(harness)], stdin=slave, stdout=slave,
-            stderr=slave, preexec_fn=controlling_terminal,
+            stderr=slave, preexec_fn=controlling_terminal, env=env,
         )
         os.close(slave)
         output = b""
+        started_at = time.monotonic()
 
         def collect(marker, seconds=6):
             nonlocal output
@@ -81,6 +84,7 @@ def check_startup(order, rows, columns):
 
         try:
             collect(b"[?]")
+            assert time.monotonic() - started_at >= 0.5, "first menu frame was not animated"
             assert "Установленные компоненты:".encode() in output, "first screen lacks components"
             assert b"xkeen 1.0" in output, "first screen lacks installed version"
             assert "Запуск Xmenu".encode() not in output, "startup banner should not be shown"

@@ -4383,7 +4383,7 @@ render_menu() {
         # Задержка короткая; все последующие возвраты к меню выводятся сразу.
         while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
             printf '%s\n' "$_XMENU_FRAME_LINE"
-            sleep 0.01
+            sleep 0.03
         done < "$_XMENU_FRAME_FILE"
         _XMENU_FRAME_RC=$?
         [ "$_XMENU_FRAME_RC" -ne 0 ] || XMENU_FIRST_FRAME_SHOWN=1
