@@ -4367,48 +4367,6 @@ XMENU_NFQWS_ACTION_EOF
 
 # The main menu is the single entry point; duplicate unreachable install/service menus were removed.
 
-xmenu_detect_menu_animation_delay() {
-    XMENU_MENU_ANIMATION_DELAY=''
-    if command -v usleep >/dev/null 2>&1 && usleep 1 >/dev/null 2>&1; then
-        XMENU_MENU_ANIMATION_DELAY=usleep
-    elif command -v busybox >/dev/null 2>&1 && busybox usleep 1 >/dev/null 2>&1; then
-        XMENU_MENU_ANIMATION_DELAY=busybox-usleep
-    elif sleep 0.01 >/dev/null 2>&1; then
-        XMENU_MENU_ANIMATION_DELAY=fractional-sleep
-    elif [ -r /proc/uptime ]; then
-        # На минимальном BusyBox sleep может принимать только целые секунды.
-        # /proc/uptime даёт системный таймер с точностью до сотых долей секунды.
-        XMENU_MENU_ANIMATION_DELAY=uptime-tick
-    fi
-}
-
-xmenu_menu_animation_pause() {
-    case "${XMENU_MENU_ANIMATION_DELAY:-}" in
-        usleep) usleep 10000 >/dev/null 2>&1 || : ;;
-        busybox-usleep) busybox usleep 10000 >/dev/null 2>&1 || : ;;
-        fractional-sleep) sleep 0.01 >/dev/null 2>&1 || : ;;
-        uptime-tick)
-            IFS=' .' read -r _xmap_sec _xmap_cs _xmap_rest < /proc/uptime || return 0
-            case "${_xmap_sec}:${_xmap_cs}" in *[!0-9:]*|:*) return 0 ;; esac
-            while [ "${_xmap_sec#0}" != "$_xmap_sec" ]; do _xmap_sec=${_xmap_sec#0}; done
-            while [ "${_xmap_cs#0}" != "$_xmap_cs" ]; do _xmap_cs=${_xmap_cs#0}; done
-            [ -n "$_xmap_sec" ] || _xmap_sec=0
-            [ -n "$_xmap_cs" ] || _xmap_cs=0
-            _xmap_start=$((_xmap_sec * 100 + _xmap_cs))
-            while :; do
-                IFS=' .' read -r _xmap_sec _xmap_cs _xmap_rest < /proc/uptime || break
-                case "${_xmap_sec}:${_xmap_cs}" in *[!0-9:]*|:*) break ;; esac
-                while [ "${_xmap_sec#0}" != "$_xmap_sec" ]; do _xmap_sec=${_xmap_sec#0}; done
-                while [ "${_xmap_cs#0}" != "$_xmap_cs" ]; do _xmap_cs=${_xmap_cs#0}; done
-                [ -n "$_xmap_sec" ] || _xmap_sec=0
-                [ -n "$_xmap_cs" ] || _xmap_cs=0
-                [ "$((_xmap_sec * 100 + _xmap_cs))" -gt "$_xmap_start" ] && break
-            done ;;
-        *) : ;;
-    esac
-    return 0
-}
-
 render_menu() {
     _XMENU_RENDER_WIDTH=$(terminal_width)
     _XMENU_FRAME_FILE="$ROOT_DIR/.menu-frame.$$"
@@ -4420,20 +4378,10 @@ render_menu() {
         XMENU_UPDATE_FRAME_COLUMNS=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || :)
     fi
     [ -t 1 ] && printf '\033[2J\033[H'
-    if [ -t 1 ] && [ "${TERM:-}" != dumb ] && [ "${XMENU_FIRST_FRAME_SHOWN:-0}" != 1 ]; then
-        # Первый экран появляется по строкам, а не открывается второй раз целиком.
-        # Задержка короткая; все последующие возвраты к меню выводятся сразу.
-        xmenu_detect_menu_animation_delay
-        while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
-            printf '%s\n' "$_XMENU_FRAME_LINE"
-            xmenu_menu_animation_pause
-        done < "$_XMENU_FRAME_FILE"
-        _XMENU_FRAME_RC=$?
-        [ "$_XMENU_FRAME_RC" -ne 0 ] || XMENU_FIRST_FRAME_SHOWN=1
-    else
-        cat "$_XMENU_FRAME_FILE"
-        _XMENU_FRAME_RC=$?
-    fi
+    # Сначала полностью готовим экран во временном файле, затем выводим одним
+    # быстрым потоком: построчные паузы заметно тормозили старт на роутерах.
+    cat "$_XMENU_FRAME_FILE"
+    _XMENU_FRAME_RC=$?
     rm -f "$_XMENU_FRAME_FILE"
     _XMENU_RENDER_WIDTH=''
     return "$_XMENU_FRAME_RC"

@@ -15,7 +15,7 @@ import time
 source = Path(__file__).resolve().parents[1] / "xmenu-v1.0.sh"
 
 
-def check_startup(order, rows, columns, force_uptime_fallback=False):
+def check_startup(order, rows, columns):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         library = root / "library.sh"
@@ -25,18 +25,13 @@ def check_startup(order, rows, columns, force_uptime_fallback=False):
             "components": 'touch "$ROOT_DIR/ready"',
             "update": 'printf "1.4.1" > "$ROOT_DIR/version"',
         }
-        delay_stub = (
-            'busybox() { return 1; }\n'
-            if force_uptime_fallback else
-            'usleep() { printf "%s\\n" "$1" >> "$ROOT_DIR/usleep.calls"; command sleep 0.01; }\n'
-        )
         harness.write_text(
             (
             f'. "{library}"\n'
             f'ROOT_DIR="{root}/data"\n'
             'BACKUP_DIR="$ROOT_DIR/backups"; LANG_FILE="$ROOT_DIR/language"\n'
-            'sleep() { case "${1:-}" in *.*) printf "sleep invalid\\n" >&2; command sleep "$1"; return 1 ;; *) command sleep "$@" ;; esac; }\n'
-            'SLEEP_STUB_INSERTION\n'
+            'sleep() { case "${1:-}" in *.*) printf "%s\\n" "$1" >> "$ROOT_DIR/fractional-sleep.calls" ;; esac; command sleep "$@"; }\n'
+            'usleep() { printf "%s\\n" "$1" >> "$ROOT_DIR/usleep.calls"; command sleep 1; }\n'
             'XMENU_COMPONENT_CACHE="$ROOT_DIR/components"\n'
             'XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components.time"\n'
             'XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/component.lock"\n'
@@ -60,7 +55,7 @@ def check_startup(order, rows, columns, force_uptime_fallback=False):
             f'  (command sleep 0.3; {events[order[0]]}; kill -USR1 "$$"; '
             f'command sleep 0.5; {events[order[1]]}; kill -USR1 "$$") &\n'
             '}\nmain\n'
-            ).replace('SLEEP_STUB_INSERTION\n', delay_stub),
+            ),
             encoding="utf-8",
         )
         master, slave = pty.openpty()
@@ -93,11 +88,9 @@ def check_startup(order, rows, columns, force_uptime_fallback=False):
 
         try:
             collect(b"[?]")
-            assert time.monotonic() - started_at >= 0.12, "first menu frame was not animated"
-            if not force_uptime_fallback:
-                delay_calls = (root / "data/usleep.calls").read_text(encoding="utf-8").splitlines()
-                assert len(delay_calls) > 5, "startup animation did not use the microsecond delay"
-            assert b"sleep invalid" not in output, "unsupported fractional sleep leaked an error"
+            assert time.monotonic() - started_at < 2, "initial menu frame was too slow"
+            assert not (root / "data/usleep.calls").exists(), "startup invoked usleep"
+            assert not (root / "data/fractional-sleep.calls").exists(), "startup invoked fractional sleep"
             assert "Установленные компоненты:".encode() in output, "first screen lacks components"
             assert b"xkeen 1.0" in output, "first screen lacks installed version"
             assert "Запуск Xmenu".encode() not in output, "startup banner should not be shown"
@@ -126,5 +119,4 @@ def check_startup(order, rows, columns, force_uptime_fallback=False):
 for order in (("components", "update"), ("update", "components")):
     for rows, columns in ((70, 80), (24, 80), (24, 40)):
         check_startup(order, rows, columns)
-        check_startup(order, rows, columns, force_uptime_fallback=True)
-print("PASS: animated first frame with usleep and uptime fallback, no banner, both background orders")
+print("PASS: immediate single-frame startup, no animation delays or banner, both background orders")
