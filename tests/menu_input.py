@@ -43,7 +43,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
         harness.write_text(
             f'. "{library}"\ntrap - 0\n' + setup +
             'xmenu_read_menu_prompt "PROMPT> "\n'
-            'result=$?\nprintf "RESULT=%s CHOICE=%s\\n" "$result" "$_read_value"\n',
+            'result=$?\nprintf "RESULT=%s CHOICE=%s PENDING=%s\\n" "$result" "$_read_value" "$XMENU_COMPONENT_REFRESH_PENDING"\n',
             encoding="utf-8",
         )
         master, slave = pty.openpty()
@@ -75,7 +75,10 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
             if shared:
                 version_file.write_text("1.4.1")
                 ready_file.write_text("ready")
-                collect_until(b"COMPONENTS-READY" if shared == "components" else "↑".encode())
+                if shared == "components":
+                    time.sleep(1.3)
+                else:
+                    collect_until("↑".encode())
                 assert process.poll() is None, "shared cache update closed menu"
             if prefix:
                 os.write(master, prefix)
@@ -95,8 +98,13 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
             assert process.wait(timeout=3) == 0
             if pending:
                 assert output.count("↑".encode()) == 1, output.decode(errors="replace")
-                assert b"U. Check updates\r\n\x1b[36m  " in output
+                assert b"\x1b7\x1b[" in output, "update was not edited in place"
+                assert output.count(b"\x1b[2J") == 1, "update cleared the entire screen again"
                 assert "v1.4.1".encode() in output
+            assert output.count(b"PROMPT> ") == 1, "background result repeated the prompt"
+            if shared == "components":
+                assert b"COMPONENTS-READY" not in output, "component refresh printed another menu"
+                assert b"PENDING=0" in output
         finally:
             if process.poll() is None:
                 process.kill()

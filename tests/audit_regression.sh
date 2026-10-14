@@ -252,4 +252,37 @@ EOF
     main __refresh-component-cache '' || fail 'internal status worker failed'
 )
 
+(
+    # Первый показ должен сразу содержать компоненты, без пустого стартового экрана.
+    rm -f "$XMENU_COMPONENT_CACHE" "$XMENU_COMPONENT_CACHE_TIME"
+    start_component_status_refresh() { fail 'cold startup scheduled a second screen'; }
+    render_component_statuses_sync() {
+        test "$XMENU_FORCE_COMPONENT_REFRESH" = 1 || fail 'cold scan was not forced'
+        printf 'INSTALLED-COMPONENTS\n'
+        printf 'xkeen\t1.0\n' > "$XMENU_COMPONENT_CACHE"
+        date +%s > "$XMENU_COMPONENT_CACHE_TIME"
+    }
+    render_component_statuses > "$audit_dir/cold-start.txt" || fail 'cold component scan failed'
+    grep -q INSTALLED-COMPONENTS "$audit_dir/cold-start.txt" || fail 'cold menu missed components'
+    test "$XMENU_COMPONENT_REFRESH_PENDING" = 0 || fail 'cold scan still requested another screen'
+)
+
+(
+    # Ошибка opkg не должна превращаться в свежий кеш с нулём установленных пакетов.
+    rm -f "$XMENU_COMPONENT_CACHE" "$XMENU_COMPONENT_CACHE_TIME"
+    XMENU_FORCE_COMPONENT_REFRESH=1
+    printf '#!/bin/sh\nexit 1\n' > "$audit_dir/bin/opkg"
+    chmod +x "$audit_dir/bin/opkg"
+    PATH="$audit_dir/bin:$audit_path"
+    export PATH
+    if render_component_statuses_sync >/dev/null; then fail 'failed OPKG snapshot reported success'; fi
+    test ! -f "$XMENU_COMPONENT_CACHE" || fail 'failed OPKG snapshot published empty cache'
+    test ! -f "$XMENU_COMPONENT_CACHE_TIME" || fail 'failed OPKG snapshot published fresh timestamp'
+    # Неработающий --version должен завершаться по общему timeout.
+    started=$(date +%s)
+    if xmenu_run_bounded 1 sh -c 'exec sleep 5'; then fail 'hanging diagnostic command ignored timeout'; fi
+    finished=$(date +%s)
+    test "$((finished - started))" -le 3 || fail 'diagnostic timeout took too long'
+)
+
 printf 'PASS: deep audit regression scenarios\n'

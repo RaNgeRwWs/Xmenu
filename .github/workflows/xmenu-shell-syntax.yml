@@ -30,3 +30,5 @@ jobs:
         run: busybox ash tests/audit_regression.sh
       - name: Check interactive menu input in PTY
         run: python3 tests/menu_input.py
+      - name: Check startup frame and background completion in PTY
+        run: python3 tests/startup_render.py

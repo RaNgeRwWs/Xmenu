@@ -122,6 +122,20 @@ has_controlling_tty() {
     ( : </dev/tty ) >/dev/null 2>&1
 }
 
+# Ограничиваем диагностические команды: неисправный --version не должен
+# удерживать первый показ меню. Интерактивный запуск утилит не ограничивается.
+xmenu_run_bounded() {
+    _xrb_limit=$1
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_xrb_limit" "$@"
+    elif command -v busybox >/dev/null 2>&1 && busybox timeout "$_xrb_limit" true >/dev/null 2>&1; then
+        busybox timeout "$_xrb_limit" "$@"
+    else
+        "$@"
+    fi
+}
+
 read_uptime_tenths() {
     _uptime_tenths=''
     [ -r /proc/uptime ] || return 1
@@ -362,7 +376,7 @@ is_installed() {
     if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ] && [ -r "$_OPKG_RENDER_CACHE_FILE" ]; then
         awk -v p="$_ip_pkg" '$1==p && $2=="-" {f=1} END{exit(f?0:1)}' "$_OPKG_RENDER_CACHE_FILE"
     else
-        opkg list-installed 2>/dev/null | awk -v p="$_ip_pkg" '$1==p{f=1} END{exit(f?0:1)}'
+        xmenu_run_bounded 3 opkg list-installed 2>/dev/null | awk -v p="$_ip_pkg" '$1==p{f=1} END{exit(f?0:1)}'
     fi
 }
 pkg_version() {
@@ -370,7 +384,7 @@ pkg_version() {
     if [ -n "${_OPKG_RENDER_CACHE_FILE:-}" ] && [ -r "$_OPKG_RENDER_CACHE_FILE" ]; then
         awk -v p="$_pv_pkg" '$1==p {if ($2=="-") print $3; else if ($2!="") print $2; exit}' "$_OPKG_RENDER_CACHE_FILE"
     else
-        opkg status "$_pv_pkg" 2>/dev/null | sed -n 's/^Version:[[:space:]]*//p' | head -n 1
+        xmenu_run_bounded 3 opkg status "$_pv_pkg" 2>/dev/null | sed -n 's/^Version:[[:space:]]*//p' | head -n 1
     fi
 }
 
@@ -634,7 +648,7 @@ get_router() {
     if [ -r /proc/device-tree/model ]; then _device_model=$(tr -d '\000\r\n' < /proc/device-tree/model 2>/dev/null); fi
     if [ -r /proc/device-tree/compatible ]; then _compat=$(tr '\000' '\n' < /proc/device-tree/compatible 2>/dev/null); fi
     if [ -z "$_model" ] || [ -z "$_title" ]; then
-        if command -v ndmc >/dev/null 2>&1; then _fallback=$(LD_LIBRARY_PATH=/lib:/usr/lib ndmc -c 'show version' 2>/dev/null); fi
+        if command -v ndmc >/dev/null 2>&1; then _fallback=$(xmenu_run_bounded 3 env LD_LIBRARY_PATH=/lib:/usr/lib ndmc -c 'show version' 2>/dev/null); fi
     fi
     [ -n "$_model" ] || _model=$(printf '%s\n' "$_fallback" | grep -iE 'Hopper|NC[- ]?3811|KN[- ]?3811|Model:|Модель:' | head -n 1 | sed 's/^[[:space:]]*//')
     [ -n "$_model" ] || _model="$_device_model"
@@ -1328,7 +1342,7 @@ install_dpi_detector() {
         say "${RED}Установщик завершился, но /opt/bin/dpi-detector не найден или не исполняемый.${RESET}"
         return 1
     }
-    _dpi_version=$(/opt/bin/dpi-detector --version 2>/dev/null | head -n 1)
+    _dpi_version=$(xmenu_run_bounded 3 /opt/bin/dpi-detector --version 2>/dev/null | head -n 1)
     case "$_dpi_version" in *[0-9]*) : ;; *) _dpi_version='версия неизвестна' ;; esac
     printf '%s\n' "$_dpi_version" > "$ROOT_DIR/dpi-detector-version" 2>/dev/null || :
     rm -f "$ROOT_DIR/dpi-detector-native-incompatible" "$ROOT_DIR/dpi-detector-python-mode"
@@ -2452,7 +2466,7 @@ launch_dpi() {
 
     # Сначала проверяем --version: это позволяет поймать ELF с отсутствующим loader,
     # не перенаправляя stderr интерактивного TUI в файл.
-    _dpi_probe=$(sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
+    _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
     _dpi_probe_rc=$?
     if [ "$_dpi_probe_rc" -eq 126 ] || [ "$_dpi_probe_rc" -eq 127 ] ||
        printf '%s\n' "$_dpi_probe" | grep -qiE 'not found|No such file|No such interpreter'; then
@@ -2462,7 +2476,7 @@ launch_dpi() {
             *) [ -z "$_dpi_probe" ] || printf '%s\n' "$_dpi_probe" | sed -n '1,4p' ;;
         esac
         install_dpi_detector force || return 1
-        _dpi_probe=$(sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
+        _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
         _dpi_probe_rc=$?
         if [ "$_dpi_probe_rc" -ne 0 ]; then
             say "${RED}DPI Detector всё ещё не запускается после установки (код $_dpi_probe_rc).${RESET}"
@@ -2524,7 +2538,7 @@ get_xkeen_version() {
     [ -n "$_xkeen_cmd" ] || { [ -x /opt/sbin/xkeen ] && _xkeen_cmd=/opt/sbin/xkeen; }
     [ -n "$_xkeen_cmd" ] || { [ -x /opt/bin/xkeen ] && _xkeen_cmd=/opt/bin/xkeen; }
     if [ -n "$_xkeen_cmd" ]; then
-        _v=$("$_xkeen_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
+        _v=$(xmenu_run_bounded 3 "$_xkeen_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
         version_token_is_valid "$_v" || _v=''
     fi
     if [ -z "$_v" ]; then
@@ -2547,7 +2561,7 @@ get_xkeen_ui_zxc_version() {
         [ -n "$_ui_cmd" ] || { [ -x /opt/sbin/xkeen-ui ] && _ui_cmd=/opt/sbin/xkeen-ui; }
         [ -n "$_ui_cmd" ] || { [ -x /opt/bin/xkeen-ui ] && _ui_cmd=/opt/bin/xkeen-ui; }
         if [ -n "$_ui_cmd" ]; then
-            _v=$("$_ui_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
+            _v=$(xmenu_run_bounded 3 "$_ui_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
             version_token_is_valid "$_v" || _v=''
         fi
     fi
@@ -2589,7 +2603,7 @@ get_xray_version() {
         printf '%s' 'не найден'
         return 0
     }
-    _v=$("$_bin" version 2>&1 | sed -n '1p')
+    _v=$(xmenu_run_bounded 3 "$_bin" version 2>&1 | sed -n '1p')
     _v=${_v:-версия не сообщена}
     printf '%s\n' "$_v" > "$_xray_cache" 2>/dev/null || :
     printf '%s' "$_v"
@@ -2613,7 +2627,7 @@ get_mihomo_version() {
         printf '%s' 'не найден'
         return 0
     }
-    _v=$("$_bin" -v 2>&1 | sed -n '1p')
+    _v=$(xmenu_run_bounded 3 "$_bin" -v 2>&1 | sed -n '1p')
     _v=${_v:-версия не сообщена}
     printf '%s\n' "$_v" > "$_mihomo_cache" 2>/dev/null || :
     printf '%s' "$_v"
@@ -2704,9 +2718,12 @@ render_component_statuses_sync() {
         _XMENU_COMPONENT_CACHE_HIT=0
         _OPKG_RENDER_CACHE_FILE="$ROOT_DIR/.opkg-installed.$$"
         : > "$_COMPONENT_INSTALLED_FILE" || return 1
-    if ! opkg list-installed > "$_OPKG_RENDER_CACHE_FILE" 2>/dev/null; then
+    if ! xmenu_run_bounded 3 opkg list-installed > "$_OPKG_RENDER_CACHE_FILE" 2>/dev/null; then
         rm -f "$_OPKG_RENDER_CACHE_FILE"
         _OPKG_RENDER_CACHE_FILE=''
+        rm -f "$_COMPONENT_INSTALLED_FILE"
+        say "${YELLOW}Не удалось прочитать список установленных компонентов; повтори проверку командой xmenu status.${RESET}"
+        return 1
     fi
 
     # Собираем и показываем только установленные компоненты.
@@ -2729,7 +2746,7 @@ render_component_statuses_sync() {
         if [ -s "$_dpi_cache" ]; then
             _dpi_v=$(cat "$_dpi_cache" 2>/dev/null)
         else
-            _dpi_probe=$(sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
+            _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
             _dpi_probe_rc=$?
             _dpi_v=$(printf '%s\n' "$_dpi_probe" | sed -n '1p')
             if [ "$_dpi_probe_rc" -eq 0 ] && [ -n "$_dpi_v" ]; then
@@ -2750,9 +2767,9 @@ render_component_statuses_sync() {
     if is_installed awg-manager; then print_component 'awg-manager' yes "$(pkg_version awg-manager)"; fi
     if [ -x /opt/keenkit.sh ] || command -v keenkit >/dev/null 2>&1; then print_component 'KeenKit' yes "$(read_version_file /opt/keenkit.version 2>/dev/null || printf 'неизвестна')"; fi
     if [ -x /opt/bin/tg-ws-proxy-rs ]; then
-        print_component 'TG WS Proxy Rust' yes "$(/opt/bin/tg-ws-proxy-rs --version 2>/dev/null | head -n 1)"
+        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_bounded 3 /opt/bin/tg-ws-proxy-rs --version 2>/dev/null | head -n 1)"
     elif [ -x /opt/bin/tgwsproxy ] || [ -x /opt/etc/init.d/S99tgwsproxy ]; then
-        print_component 'TG WS Proxy Rust' yes "$(/opt/bin/tgwsproxy --version 2>/dev/null | head -n 1)"
+        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_bounded 3 /opt/bin/tgwsproxy --version 2>/dev/null | head -n 1)"
     fi
     _xrv=$(get_xray_version)
     if [ "$_xrv" = 'не найден' ]; then print_component 'Xray' no ''; else print_component 'Xray' yes "$_xrv"; fi
@@ -2867,12 +2884,22 @@ start_component_status_refresh() {
     return 0
 }
 
-# Normal rendering never waits for slow version probes. It uses a fresh cache,
-# falls back to last known rows while revalidating, and redraws when the worker ends.
+# Первый список готовим до показа меню. Старый непустой кеш обновляем в фоне;
+# новый результат появится при следующем обычном входе в меню, без второй страницы.
 render_component_statuses() {
     if [ "${XMENU_FORCE_COMPONENT_REFRESH:-0}" = 1 ]; then
+        XMENU_COMPONENT_REFRESH_PENDING=0
         render_component_statuses_sync
         return $?
+    fi
+
+    if [ ! -f "$XMENU_COMPONENT_CACHE" ]; then
+        XMENU_COMPONENT_REFRESH_PENDING=0
+        XMENU_FORCE_COMPONENT_REFRESH=1
+        render_component_statuses_sync
+        _rcs_first_rc=$?
+        unset XMENU_FORCE_COMPONENT_REFRESH
+        return "$_rcs_first_rc"
     fi
 
     if component_status_cache_fresh; then
@@ -3191,18 +3218,9 @@ xmenu_wget_bounded() {
     if "$_xwb_wget" --help 2>&1 | grep -Eq -- '--tries|(^|[[:space:]])-t([,[:space:]]|$)'; then
         set -- -t 1 "$@"
     fi
-    if command -v timeout >/dev/null 2>&1; then
-        timeout "$_xwb_limit" "$_xwb_wget" "$@"
-        return $?
-    fi
-    if command -v busybox >/dev/null 2>&1 && busybox timeout "$_xwb_limit" true >/dev/null 2>&1; then
-        busybox timeout "$_xwb_limit" "$_xwb_wget" "$@"
-        return $?
-    fi
     # Если timeout отсутствует, сохраняем сетевой тайм-аут -T и доступное
     # ограничение повторов вместо отключения загрузчика.
-    "$_xwb_wget" "$@"
-    return $?
+    xmenu_run_bounded "$_xwb_limit" "$_xwb_wget" "$@"
 }
 
 xmenu_fetch_file() {
@@ -3397,13 +3415,8 @@ xmenu_update_check_worker() {
         printf 'checked=%s\n' "$(date +%s 2>/dev/null || printf 0)"
         printf 'version=%s\n' "$_xuw_version"
     } > "$_xuw_tmp" 2>/dev/null && mv -f "$_xuw_tmp" "$XMENU_UPDATE_CACHE" 2>/dev/null || rm -f "$_xuw_tmp"
-    _xuw_update_pending=0
-    if xmenu_valid_version "$_xuw_version" && version_is_older "$APP_VERSION" "$_xuw_version"; then
-        _xuw_update_pending=1
-    fi
-    if [ "$_xuw_update_pending" = 1 ]; then
-        kill -USR1 "$_xuw_parent" 2>/dev/null || :
-    fi
+    # Готовность кеша проверяет основной prompt. Сигнал мог прерывать read
+    # в подтверждении или подменю и ошибочно отменять выбранное действие.
     if [ "$(cat "$XMENU_UPDATE_LOCK/menu_pid" 2>/dev/null || :)" = "$_xuw_parent" ]; then
         rm -rf "$XMENU_UPDATE_LOCK" 2>/dev/null || :
     fi
@@ -3502,19 +3515,35 @@ xmenu_read_menu_prompt() {
 }
 
 xmenu_redraw_pending_update() {
-    # После первичной фоновой загрузки статусов перерисовываем меню с готовыми компонентами.
+    # Фоновые события больше не вызывают render_menu: кадр и введённые символы
+    # остаются на месте, а готовые строки компонентов показываем при следующем входе.
     if [ "${XMENU_COMPONENT_REFRESH_PENDING:-0}" = 1 ] && component_status_cache_fresh; then
         XMENU_COMPONENT_REFRESH_PENDING=0
-        render_menu
-        return 0
     fi
-    # Результат фоновой проверки показываем на месте под U, а не под приглашением.
     [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] && return 1
     _xrpu_latest=$(xmenu_cached_remote_version 2>/dev/null || :)
     xmenu_valid_version "$_xrpu_latest" || return 1
     version_is_older "$APP_VERSION" "$_xrpu_latest" || return 1
-    render_menu
-    return 0
+    [ -t 1 ] && has_controlling_tty || return 1
+    # В высоком терминале обновляем зарезервированную строку под U. Если она
+    # уже ушла за верх экрана или терминал изменил размер, используем нижний разделитель.
+    _xrpu_up=1
+    _xrpu_size=$(stty size </dev/tty 2>/dev/null || :)
+    _xrpu_rows=${_xrpu_size%% *}
+    _xrpu_columns=${_xrpu_size#* }
+    case "${XMENU_UPDATE_SLOT_UP:-}:${_xrpu_rows}:${_xrpu_columns}" in
+        *[!0-9:]*|:*|*::*|*:) : ;;
+        *)
+            if [ "${XMENU_UPDATE_FRAME_COLUMNS:-0}" = "$_xrpu_columns" ] &&
+               [ "$XMENU_UPDATE_SLOT_UP" -gt 0 ] && [ "$XMENU_UPDATE_SLOT_UP" -lt "$_xrpu_rows" ]; then
+                _xrpu_up=$XMENU_UPDATE_SLOT_UP
+            fi ;;
+    esac
+    printf '\0337\033[%sA\r\033[2K' "$_xrpu_up"
+    xmenu_show_pending_update_notice
+    printf '\0338'
+    # Курсор восстановлен вместе с набранным вводом: приглашение не печатаем второй раз.
+    return 1
 }
 
 xmenu_show_pending_update_notice() {
@@ -3523,10 +3552,17 @@ xmenu_show_pending_update_notice() {
     xmenu_valid_version "$_xsp_latest" || return 0
     version_is_older "$APP_VERSION" "$_xsp_latest" || return 0
     if [ "$(get_ui_lang)" = en ]; then
-        say "${CYAN}  ↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it.${RESET}"
+        _xsp_notice="↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it."
     else
-        say "${CYAN}  ↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки.${RESET}"
+        _xsp_notice="↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки."
     fi
+    _xsp_width=$(terminal_width)
+    _xsp_length=$(printf '%s' "$_xsp_notice" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+    if [ $((_xsp_length + 2)) -ge "$_xsp_width" ]; then
+        if [ "$(get_ui_lang)" = en ]; then _xsp_notice="↑ Xmenu v$_xsp_latest — update: 22"
+        else _xsp_notice="↑ Xmenu v$_xsp_latest — обновить: 22"; fi
+    fi
+    say "${CYAN}  $_xsp_notice${RESET}"
     XMENU_UPDATE_NOTICE_VISIBLE=1
 }
 
@@ -4333,7 +4369,23 @@ XMENU_NFQWS_ACTION_EOF
 
 render_menu() {
     _XMENU_RENDER_WIDTH=$(terminal_width)
+    _XMENU_FRAME_FILE="$ROOT_DIR/.menu-frame.$$"
+    if ! render_menu_content > "$_XMENU_FRAME_FILE"; then rm -f "$_XMENU_FRAME_FILE"; return 1; fi
+    _XMENU_FRAME_LINES=$(wc -l < "$_XMENU_FRAME_FILE" | tr -d ' ')
+    XMENU_UPDATE_SLOT_UP=$((_XMENU_FRAME_LINES + 1 - _XMENU_NOTICE_LINE))
+    XMENU_UPDATE_FRAME_COLUMNS=''
+    if has_controlling_tty; then
+        XMENU_UPDATE_FRAME_COLUMNS=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || :)
+    fi
     [ -t 1 ] && printf '\033[2J\033[H'
+    cat "$_XMENU_FRAME_FILE"
+    _XMENU_FRAME_RC=$?
+    rm -f "$_XMENU_FRAME_FILE"
+    _XMENU_RENDER_WIDTH=''
+    return "$_XMENU_FRAME_RC"
+}
+
+render_menu_content() {
     _lang=$(get_ui_lang)
     # Router model, firmware and Entware architecture do not change during one menu session.
     # Query once, then reuse the values when returning from a submenu/action.
@@ -4372,7 +4424,9 @@ render_menu() {
     else
         menu_item U 'Проверить наличие обновления Xmenu'
     fi
+    _XMENU_NOTICE_LINE=$(( $(wc -l < "$_XMENU_FRAME_FILE") + 1 ))
     xmenu_show_pending_update_notice
+    [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] || say ''
 
     if [ "$_lang" = en ]; then
         say "${PURPLE}[::]  Install / update:${RESET}"
@@ -4446,7 +4500,6 @@ render_menu() {
         _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
     line
-    _XMENU_RENDER_WIDTH=''
 }
 
 # ---------------------------- Component removal ----------------------------
@@ -4948,7 +5001,6 @@ main() {
             if [ -d "$XMENU_COMPONENT_REFRESH_LOCK" ] &&
                [ "$(cat "$XMENU_COMPONENT_REFRESH_LOCK/menu_pid" 2>/dev/null || :)" = "$_xcrc_parent" ]; then
                 rm -rf "$XMENU_COMPONENT_REFRESH_LOCK" 2>/dev/null || :
-                case "$_xcrc_parent" in ''|*[!0-9]*|0) : ;; *) kill -USR1 "$_xcrc_parent" 2>/dev/null || : ;; esac
             fi
             return "$_xcrc_rc" ;;
         sync|update-strategies)
@@ -5004,11 +5056,15 @@ main() {
     xmenu_start_update_check || :
     # Первое открытие не запускает установку компонентов и не показывает предупреждений.
     while :; do
-        render_menu
+        render_menu || { say "${RED}Не удалось вывести меню; проверь свободное место в $ROOT_DIR.${RESET}"; return 1; }
         INTERRUPTED=0
         MENU_READING=1
         _menu_lang=$(get_ui_lang)
         if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [U = check updates, Enter = exit]: '; else _prompt='[?] Выберите пункт [U = проверить обновление, Enter = выход]: '; fi
+        if [ "$(terminal_width)" -lt 70 ]; then
+            if [ "$_menu_lang" = en ]; then _prompt='[?] Option [U, Enter=exit]: '
+            else _prompt='[?] Пункт [U, Enter=выход]: '; fi
+        fi
         xmenu_read_menu_prompt "${LAVENDER}$_prompt${RESET}"
         _read_rc=$?
         MENU_READING=0
