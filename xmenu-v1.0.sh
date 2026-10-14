@@ -116,6 +116,24 @@ else
 fi
 say() { printf '%s\n' "$*"; }
 
+# Короткая заставка при открытии интерактивного меню. Не очищает экран и
+# пропускается в неинтерактивном режиме, чтобы не мешать вызовам из скриптов.
+xmenu_startup_animation() {
+    [ -t 1 ] || return 0
+    [ "${TERM:-}" != dumb ] || return 0
+
+    if [ "$(get_ui_lang)" = en ]; then
+        _xsa_label='Starting Xmenu'
+    else
+        _xsa_label='Запуск Xmenu'
+    fi
+    for _xsa_bar in '#   ' '##  ' '### ' '####'; do
+        printf '\r\033[K%s%s%s [%s]%s' "$CYAN" "$_xsa_label" "$RESET" "$_xsa_bar" "$RESET"
+        sleep 0.07
+    done
+    printf '\r\033[K'
+}
+
 # A character device may exist even when the process has no controlling TTY.
 # Attempt to open /dev/tty before redirecting interactive installer I/O.
 has_controlling_tty() {
@@ -5052,6 +5070,7 @@ main() {
         opkg-settings) opkg_settings_menu; return $? ;;
         *) : ;;
     esac
+    xmenu_startup_animation
     # Проверка последней версии работает в фоне: меню не ждёт GitHub/зеркала и не зависит от opkg.
     xmenu_start_update_check || :
     # Первое открытие не запускает установку компонентов и не показывает предупреждений.
