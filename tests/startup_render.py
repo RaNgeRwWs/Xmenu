@@ -30,7 +30,7 @@ def check_startup(order, rows, columns):
             f'ROOT_DIR="{root}/data"\n'
             'BACKUP_DIR="$ROOT_DIR/backups"; LANG_FILE="$ROOT_DIR/language"\n'
             'sleep() { case "${1:-}" in *.*) printf "sleep invalid\\n" >&2; command sleep "$1"; return 1 ;; *) command sleep "$@" ;; esac; }\n'
-            'usleep() { printf "%s\\n" "$1" >> "$ROOT_DIR/usleep.calls"; command sleep 0.03; }\n'
+            'usleep() { printf "%s\\n" "$1" >> "$ROOT_DIR/usleep.calls"; case "$1" in 1) command sleep 0.03 ;; *) command sleep 0.005 ;; esac; }\n'
             'XMENU_COMPONENT_CACHE="$ROOT_DIR/components"\n'
             'XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components.time"\n'
             'XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/component.lock"\n'
@@ -86,7 +86,7 @@ def check_startup(order, rows, columns):
 
         try:
             collect(b"[?]")
-            assert time.monotonic() - started_at >= 0.5, "first menu frame was not animated"
+            assert time.monotonic() - started_at >= 0.12, "first menu frame was not animated"
             delay_calls = (root / "data/usleep.calls").read_text(encoding="utf-8").splitlines()
             assert len(delay_calls) > 5, "startup animation did not use the BusyBox-safe microsecond delay"
             assert b"sleep invalid" not in output, "unsupported fractional sleep leaked an error"

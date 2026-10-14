@@ -4373,16 +4373,16 @@ xmenu_detect_menu_animation_delay() {
         XMENU_MENU_ANIMATION_DELAY=usleep
     elif command -v busybox >/dev/null 2>&1 && busybox usleep 1 >/dev/null 2>&1; then
         XMENU_MENU_ANIMATION_DELAY=busybox-usleep
-    elif sleep 0.03 >/dev/null 2>&1; then
+    elif sleep 0.005 >/dev/null 2>&1; then
         XMENU_MENU_ANIMATION_DELAY=fractional-sleep
     fi
 }
 
 xmenu_menu_animation_pause() {
     case "${XMENU_MENU_ANIMATION_DELAY:-}" in
-        usleep) usleep 30000 >/dev/null 2>&1 || : ;;
-        busybox-usleep) busybox usleep 30000 >/dev/null 2>&1 || : ;;
-        fractional-sleep) sleep 0.03 >/dev/null 2>&1 || : ;;
+        usleep) usleep 5000 >/dev/null 2>&1 || : ;;
+        busybox-usleep) busybox usleep 5000 >/dev/null 2>&1 || : ;;
+        fractional-sleep) sleep 0.005 >/dev/null 2>&1 || : ;;
         *) : ;;
     esac
     return 0
