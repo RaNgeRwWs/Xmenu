@@ -4367,6 +4367,27 @@ XMENU_NFQWS_ACTION_EOF
 
 # The main menu is the single entry point; duplicate unreachable install/service menus were removed.
 
+xmenu_detect_menu_animation_delay() {
+    XMENU_MENU_ANIMATION_DELAY=''
+    if command -v usleep >/dev/null 2>&1 && usleep 1 >/dev/null 2>&1; then
+        XMENU_MENU_ANIMATION_DELAY=usleep
+    elif command -v busybox >/dev/null 2>&1 && busybox usleep 1 >/dev/null 2>&1; then
+        XMENU_MENU_ANIMATION_DELAY=busybox-usleep
+    elif sleep 0.03 >/dev/null 2>&1; then
+        XMENU_MENU_ANIMATION_DELAY=fractional-sleep
+    fi
+}
+
+xmenu_menu_animation_pause() {
+    case "${XMENU_MENU_ANIMATION_DELAY:-}" in
+        usleep) usleep 30000 >/dev/null 2>&1 || : ;;
+        busybox-usleep) busybox usleep 30000 >/dev/null 2>&1 || : ;;
+        fractional-sleep) sleep 0.03 >/dev/null 2>&1 || : ;;
+        *) : ;;
+    esac
+    return 0
+}
+
 render_menu() {
     _XMENU_RENDER_WIDTH=$(terminal_width)
     _XMENU_FRAME_FILE="$ROOT_DIR/.menu-frame.$$"
@@ -4381,9 +4402,10 @@ render_menu() {
     if [ -t 1 ] && [ "${TERM:-}" != dumb ] && [ "${XMENU_FIRST_FRAME_SHOWN:-0}" != 1 ]; then
         # Первый экран появляется по строкам, а не открывается второй раз целиком.
         # Задержка короткая; все последующие возвраты к меню выводятся сразу.
+        xmenu_detect_menu_animation_delay
         while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
             printf '%s\n' "$_XMENU_FRAME_LINE"
-            sleep 0.03
+            xmenu_menu_animation_pause
         done < "$_XMENU_FRAME_FILE"
         _XMENU_FRAME_RC=$?
         [ "$_XMENU_FRAME_RC" -ne 0 ] || XMENU_FIRST_FRAME_SHOWN=1
