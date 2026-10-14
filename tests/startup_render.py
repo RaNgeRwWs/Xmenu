@@ -1,4 +1,4 @@
-"""Первый экран, два фоновых результата и ввод номера во время уведомления."""
+"""Быстрый последовательный экран, фоновые результаты и ввод во время уведомления."""
 import fcntl
 from pathlib import Path
 import os
@@ -119,4 +119,4 @@ def check_startup(order, rows, columns):
 for order in (("components", "update"), ("update", "components")):
     for rows, columns in ((70, 80), (24, 80), (24, 40)):
         check_startup(order, rows, columns)
-print("PASS: immediate single-frame startup, no animation delays or banner, both background orders")
+print("PASS: quick sequential startup, no artificial delays or duplicate menu, both background orders")

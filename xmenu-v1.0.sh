@@ -4378,9 +4378,11 @@ render_menu() {
         XMENU_UPDATE_FRAME_COLUMNS=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || :)
     fi
     [ -t 1 ] && printf '\033[2J\033[H'
-    # Сначала полностью готовим экран во временном файле, затем выводим одним
-    # быстрым потоком: построчные паузы заметно тормозили старт на роутерах.
-    cat "$_XMENU_FRAME_FILE"
+    # Печатаем готовые строки подряд без пауз: меню быстро появляется
+    # последовательно, как в nfqws-menu, и не ждёт таймеров между пунктами.
+    while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
+        printf '%s\n' "$_XMENU_FRAME_LINE"
+    done < "$_XMENU_FRAME_FILE"
     _XMENU_FRAME_RC=$?
     rm -f "$_XMENU_FRAME_FILE"
     _XMENU_RENDER_WIDTH=''
