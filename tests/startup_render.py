@@ -83,6 +83,8 @@ def check_startup(order, rows, columns):
             collect(b"[?]")
             assert "Установленные компоненты:".encode() in output, "first screen lacks components"
             assert b"xkeen 1.0" in output, "first screen lacks installed version"
+            assert "Запуск Xmenu".encode() not in output, "startup banner should not be shown"
+            assert b"Starting Xmenu" not in output, "startup banner should not be shown"
             os.write(master, b"2")
             collect(b"v1.4.1")
             time.sleep(0.5)

@@ -116,24 +116,6 @@ else
 fi
 say() { printf '%s\n' "$*"; }
 
-# Короткая заставка при открытии интерактивного меню. Не очищает экран и
-# пропускается в неинтерактивном режиме, чтобы не мешать вызовам из скриптов.
-xmenu_startup_animation() {
-    [ -t 1 ] || return 0
-    [ "${TERM:-}" != dumb ] || return 0
-
-    if [ "$(get_ui_lang)" = en ]; then
-        _xsa_label='Starting Xmenu'
-    else
-        _xsa_label='Запуск Xmenu'
-    fi
-    for _xsa_bar in '#   ' '##  ' '### ' '####'; do
-        printf '\r\033[K%s%s%s [%s]%s' "$CYAN" "$_xsa_label" "$RESET" "$_xsa_bar" "$RESET"
-        sleep 0.07
-    done
-    printf '\r\033[K'
-}
-
 # A character device may exist even when the process has no controlling TTY.
 # Attempt to open /dev/tty before redirecting interactive installer I/O.
 has_controlling_tty() {
@@ -4396,8 +4378,19 @@ render_menu() {
         XMENU_UPDATE_FRAME_COLUMNS=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || :)
     fi
     [ -t 1 ] && printf '\033[2J\033[H'
-    cat "$_XMENU_FRAME_FILE"
-    _XMENU_FRAME_RC=$?
+    if [ -t 1 ] && [ "${TERM:-}" != dumb ] && [ "${XMENU_FIRST_FRAME_SHOWN:-0}" != 1 ]; then
+        # Первый экран появляется по строкам, а не открывается второй раз целиком.
+        # Задержка короткая; все последующие возвраты к меню выводятся сразу.
+        while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
+            printf '%s\n' "$_XMENU_FRAME_LINE"
+            sleep 0.01
+        done < "$_XMENU_FRAME_FILE"
+        _XMENU_FRAME_RC=$?
+        [ "$_XMENU_FRAME_RC" -ne 0 ] || XMENU_FIRST_FRAME_SHOWN=1
+    else
+        cat "$_XMENU_FRAME_FILE"
+        _XMENU_FRAME_RC=$?
+    fi
     rm -f "$_XMENU_FRAME_FILE"
     _XMENU_RENDER_WIDTH=''
     return "$_XMENU_FRAME_RC"
@@ -5070,7 +5063,6 @@ main() {
         opkg-settings) opkg_settings_menu; return $? ;;
         *) : ;;
     esac
-    xmenu_startup_animation
     # Проверка последней версии работает в фоне: меню не ждёт GitHub/зеркала и не зависит от opkg.
     xmenu_start_update_check || :
     # Первое открытие не запускает установку компонентов и не показывает предупреждений.
