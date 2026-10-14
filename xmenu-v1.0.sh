@@ -4373,16 +4373,37 @@ xmenu_detect_menu_animation_delay() {
         XMENU_MENU_ANIMATION_DELAY=usleep
     elif command -v busybox >/dev/null 2>&1 && busybox usleep 1 >/dev/null 2>&1; then
         XMENU_MENU_ANIMATION_DELAY=busybox-usleep
-    elif sleep 0.005 >/dev/null 2>&1; then
+    elif sleep 0.01 >/dev/null 2>&1; then
         XMENU_MENU_ANIMATION_DELAY=fractional-sleep
+    elif [ -r /proc/uptime ]; then
+        # На минимальном BusyBox sleep может принимать только целые секунды.
+        # /proc/uptime даёт системный таймер с точностью до сотых долей секунды.
+        XMENU_MENU_ANIMATION_DELAY=uptime-tick
     fi
 }
 
 xmenu_menu_animation_pause() {
     case "${XMENU_MENU_ANIMATION_DELAY:-}" in
-        usleep) usleep 5000 >/dev/null 2>&1 || : ;;
-        busybox-usleep) busybox usleep 5000 >/dev/null 2>&1 || : ;;
-        fractional-sleep) sleep 0.005 >/dev/null 2>&1 || : ;;
+        usleep) usleep 10000 >/dev/null 2>&1 || : ;;
+        busybox-usleep) busybox usleep 10000 >/dev/null 2>&1 || : ;;
+        fractional-sleep) sleep 0.01 >/dev/null 2>&1 || : ;;
+        uptime-tick)
+            IFS=' .' read -r _xmap_sec _xmap_cs _xmap_rest < /proc/uptime || return 0
+            case "${_xmap_sec}:${_xmap_cs}" in *[!0-9:]*|:*) return 0 ;; esac
+            while [ "${_xmap_sec#0}" != "$_xmap_sec" ]; do _xmap_sec=${_xmap_sec#0}; done
+            while [ "${_xmap_cs#0}" != "$_xmap_cs" ]; do _xmap_cs=${_xmap_cs#0}; done
+            [ -n "$_xmap_sec" ] || _xmap_sec=0
+            [ -n "$_xmap_cs" ] || _xmap_cs=0
+            _xmap_start=$((_xmap_sec * 100 + _xmap_cs))
+            while :; do
+                IFS=' .' read -r _xmap_sec _xmap_cs _xmap_rest < /proc/uptime || break
+                case "${_xmap_sec}:${_xmap_cs}" in *[!0-9:]*|:*) break ;; esac
+                while [ "${_xmap_sec#0}" != "$_xmap_sec" ]; do _xmap_sec=${_xmap_sec#0}; done
+                while [ "${_xmap_cs#0}" != "$_xmap_cs" ]; do _xmap_cs=${_xmap_cs#0}; done
+                [ -n "$_xmap_sec" ] || _xmap_sec=0
+                [ -n "$_xmap_cs" ] || _xmap_cs=0
+                [ "$((_xmap_sec * 100 + _xmap_cs))" -gt "$_xmap_start" ] && break
+            done ;;
         *) : ;;
     esac
     return 0
