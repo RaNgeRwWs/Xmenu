@@ -19,7 +19,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
         library.write_text(source.read_text().replace('\nmain "$@"\n', '\n'), encoding="utf-8")
         harness = Path(directory) / "prompt.sh"
         version_file = Path(directory) / "version"
-        version_file.write_text("1.4.0")
+        version_file.write_text("1.4.1")
         ready_file = Path(directory) / "ready"
         setup = 'xmenu_show_pending_update_notice() { :; }\n'
         if pending:

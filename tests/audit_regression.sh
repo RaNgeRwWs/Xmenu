@@ -30,7 +30,7 @@ out=''
 while [ "$#" -gt 0 ]; do
     case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac
 done
-printf '#!/bin/sh\nAPP_VERSION="1.4.0"\n' > "$out"
+printf '#!/bin/sh\nAPP_VERSION="1.4.1"\n' > "$out"
 if [ "$XMENU_TEST_NET_MODE" = curl-ok ]; then printf '200'; exit 0; fi
 exit 28
 EOF
@@ -44,7 +44,7 @@ while [ "$#" -gt 0 ]; do
         *) shift ;;
     esac
 done
-printf '#!/bin/sh\nAPP_VERSION="1.4.0"\n' > "$out"
+printf '#!/bin/sh\nAPP_VERSION="1.4.1"\n' > "$out"
 [ "$XMENU_TEST_NET_MODE" = wget-ok ] && exit 0
 exit 4
 EOF
@@ -102,6 +102,7 @@ EOF
     mkdir -p "$CACHE_DIR/nfqws2" "$audit_dir/nfqws2" "$ROOT_DIR/manifests"
     printf 'NFQWS_ARGS="--old"\n' > "$audit_dir/nfqws2/nfqws2.conf"
     printf 'NFQWS_ARGS="--new"\n' > "$CACHE_DIR/nfqws2/alt.conf"
+    printf '%s  strategies/nfqws2/alt.conf\n' "$(sha256_file "$CACHE_DIR/nfqws2/alt.conf")" > "$ROOT_DIR/manifests/SHA256SUMS"
     printf 'PEER SESSION LIST\n' > "$ROOT_DIR/strategies.list"
     sync_strategies() { return 0; }
     active_conf() { printf '%s|%s' "$audit_dir/nfqws2/nfqws2.conf" "$audit_dir/nfqws2/blobs"; }

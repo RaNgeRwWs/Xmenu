@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.4.0 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.4.0"
+# Xmenu ◆ v1.4.1 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.4.1"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xmenu"
@@ -1513,92 +1513,63 @@ manifest_relpath() {
     printf '%s\n' "$1" | cut -c65- | sed 's/^[[:space:]]*//; s/^\*//'
 }
 sync_strategies() {
-    # Сначала пытаемся подготовить сеть, но при сбое продолжаем с проверенным кэшем.
+    # Список берём из манифеста, сами конфиги загружаются после выбора.
+    mkdir -p "$CACHE_DIR/nfqws1" "$CACHE_DIR/nfqws2" "$CACHE_DIR/blobs" "$ROOT_DIR/manifests" || return 1
+    _cached_manifest="$ROOT_DIR/manifests/SHA256SUMS"
+    _sync_stamp="$ROOT_DIR/strategies-sync.cache"
+    _sync_valid_manifest() {
+        [ -s "$1" ] && awk '
+            length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ {
+                p=substr($0, index($0, $2)); sub(/^\*/, "", p)
+                if (p ~ /^strategies\/nfqws[12]\/[^/]+\.conf$/) ok++
+            }
+            END {exit(ok ? 0 : 1)}
+        ' "$1"
+    }
+    _sync_checked=$(sed -n 's/^checked=\([0-9][0-9]*\)$/\1/p' "$_sync_stamp" 2>/dev/null | sed -n '1p')
+    _sync_now=$(date +%s 2>/dev/null)
+    case "$_sync_checked:$_sync_now" in *[!0-9:]*|:*) _sync_checked= ;; esac
+    if [ -n "$_sync_checked" ] && [ -n "$_sync_now" ] && [ "$_sync_now" -ge "$_sync_checked" ] &&
+       [ $((_sync_now - _sync_checked)) -lt 3600 ] && _sync_valid_manifest "$_cached_manifest"; then
+        return 0
+    fi
+
     _sync_can_fetch=1
     ensure_base || _sync_can_fetch=0
-    mkdir -p "$CACHE_DIR/nfqws1" "$CACHE_DIR/nfqws2" "$CACHE_DIR/blobs" "$ROOT_DIR/manifests" || return 1
     _tmp="$ROOT_DIR/sync.$$"
     rm -rf "$_tmp"
     mkdir -p "$_tmp" || return 1
-    _cached_manifest="$ROOT_DIR/manifests/SHA256SUMS"
-
     if [ "$_sync_can_fetch" = 1 ] && fetch "$NF_REPO/SHA256SUMS" "$_tmp/SHA256SUMS" 30 &&
-       grep -Eq 'strategies/nfqws[12]/.*\.conf' "$_tmp/SHA256SUMS"; then
+       _sync_valid_manifest "$_tmp/SHA256SUMS"; then
         mv "$_tmp/SHA256SUMS" "$_cached_manifest" || { rm -rf "$_tmp"; return 1; }
-    elif [ -s "$_cached_manifest" ] && grep -Eq 'strategies/nfqws[12]/.*\.conf' "$_cached_manifest"; then
-        say "${YELLOW}Использую сохранённый манифест стратегий.${RESET}"
+        printf 'checked=%s\n' "$_sync_now" > "$_sync_stamp.tmp.$$" &&
+            mv -f "$_sync_stamp.tmp.$$" "$_sync_stamp" || { rm -rf "$_tmp"; return 1; }
+    elif _sync_valid_manifest "$_cached_manifest"; then
+        say "${YELLOW}Не удалось обновить список; использую сохранённый манифест стратегий.${RESET}"
     else
         rm -rf "$_tmp"
         say "${RED}Нет доступного манифеста стратегий и проверенного офлайн-кэша.${RESET}"
         return 1
     fi
-
-    _cached_blob_manifest="$ROOT_DIR/manifests/blobs-SHA256SUMS"
-    if [ "$_sync_can_fetch" = 1 ] && fetch "$NF_REPO/strategies/blobs/SHA256SUMS" "$_tmp/blobs.SHA256SUMS" 30 &&
-       awk 'NF>=2 && length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ {n++} END {exit(n>0?0:1)}' "$_tmp/blobs.SHA256SUMS"; then
-        mv "$_tmp/blobs.SHA256SUMS" "$_cached_blob_manifest" || { rm -rf "$_tmp"; return 1; }
-    fi
-
-    _manifest="$_cached_manifest"
-    _sync_have_cache=0
-    _sync_errors=0
-    while IFS= read -r _entry || [ -n "$_entry" ]; do
-        [ "${INTERRUPTED:-0}" = 0 ] || { rm -rf "$_tmp"; say 'Синхронизация прервана пользователем.'; return 130; }
-        _hash=$(printf '%s' "$_entry" | cut -c1-64)
-        _rel=$(manifest_relpath "$_entry")
-        case "$_hash" in *[!a-fA-F0-9]*|'') continue ;; esac
-        [ "${#_hash}" -eq 64 ] || continue
-        case "$_rel" in
-            strategies/nfqws1/*.conf|strategies/nfqws2/*.conf) ;;
-            *) continue ;;
-        esac
-        case "$_rel" in /*|../*|*/../*|*/..|*//*) continue ;; esac
-        _name=${_rel##*/}
-        case "$_name" in ''|.|..|*/*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\'*) continue ;; esac
-        printf '%s\n' "$_name" | LC_ALL=C grep -Eq '^[A-Za-z0-9_.+ -]+$' || continue
-        case "$_rel" in
-            strategies/nfqws1/*) _dest="$CACHE_DIR/nfqws1/$_name" ;;
-            strategies/nfqws2/*) _dest="$CACHE_DIR/nfqws2/$_name" ;;
-        esac
-        if [ -s "$_dest" ] && verify_sum "$_dest" "$_hash"; then
-            _sync_have_cache=1
-            continue
-        fi
-        if [ "$_sync_can_fetch" = 1 ]; then
-            _dl="$_tmp/strategy-download.$$"
-            _url_rel=$(printf '%s' "$_rel" | sed 's/ /%20/g')
-            if fetch "$NF_REPO/$_url_rel" "$_dl" 45 && verify_sum "$_dl" "$_hash"; then
-                [ -f "$_dest" ] && backup_file "$_dest" || :
-                if mv "$_dl" "$_dest"; then
-                    _sync_have_cache=1
-                else
-                    rm -f "$_dl"
-                    _sync_errors=$((_sync_errors + 1))
-                fi
-            else
-                rm -f "$_dl"
-                _sync_errors=$((_sync_errors + 1))
-            fi
-        fi
-    done < "$_manifest"
-
-    # Также считаем кэш доступным, если в нём есть хотя бы одна стратегия-файл.
-    for _f in "$CACHE_DIR/nfqws1"/*.conf "$CACHE_DIR/nfqws2"/*.conf; do
-        [ -s "$_f" ] || continue
-        _sync_have_cache=1
-        break
-    done
     rm -rf "$_tmp"
-    if [ "$_sync_have_cache" != 1 ]; then
-        say "${RED}Список стратегий получен, но локальные файлы отсутствуют. Проверь соединение.${RESET}"
-        return 1
-    fi
-    if [ "$_sync_errors" -gt 0 ]; then
-        say "${YELLOW}Часть стратегий не обновлена; доступны уже сохранённые файлы.${RESET}"
-    fi
     return 0
 }
 
+strategy_names_from_manifest() {
+    _sn_ver=$1
+    _sn_manifest="$ROOT_DIR/manifests/SHA256SUMS"
+    [ -s "$_sn_manifest" ] || return 1
+    LC_ALL=C awk -v ver="$_sn_ver" '
+        length(substr($0,1,64))==64 && substr($0,1,64) ~ /^[0-9a-fA-F]+$/ {
+            rel=substr($0,65); sub(/^[[:space:]]+/, "", rel); sub(/^\*/, "", rel)
+            prefix="strategies/nfqws" ver "/"
+            if (index(rel,prefix)!=1) next
+            name=substr(rel,length(prefix)+1)
+            if (name !~ /^[A-Za-z0-9_.+ -]+\.conf$/ || name ~ /\.\./) next
+            print name
+        }
+    ' "$_sn_manifest" | LC_ALL=C sort -u
+}
 # Извлекаем абсолютные пути к blobs/lists так же, как nfqws-menu: учитываем @/path и =/path.
 extract_blob_paths() {
     # A path may be written as --option="/path/file.bin" or --option='/path/file.bin'.
@@ -2058,7 +2029,7 @@ active_strategy_label() {
 strategy_menu() {
     strategy_menu_session
     _sms_rc=$?
-    rm -f "$ROOT_DIR/strategies-list.$$" "$ROOT_DIR/strategies-priority.$$" "$ROOT_DIR/strategies-other.$$" "$ROOT_DIR/strategies-display.$$"
+    rm -f "$ROOT_DIR/strategies-list.$$" "$ROOT_DIR/strategies-priority.$$" "$ROOT_DIR/strategies-other.$$" "$ROOT_DIR/strategies-display.$$" "$ROOT_DIR/strategies-catalog.$$"
     return "$_sms_rc"
 }
 
@@ -2071,6 +2042,8 @@ strategy_menu_session() {
     _priority="$ROOT_DIR/strategies-priority.$$"
     _others="$ROOT_DIR/strategies-other.$$"
     _display="$ROOT_DIR/strategies-display.$$"
+    _catalog="$ROOT_DIR/strategies-catalog.$$"
+    strategy_names_from_manifest "$_ver" > "$_catalog" || :
     : > "$_list"
     # Сначала показываем самые используемые стратегии в привычном порядке.
     cat > "$_priority" <<'XMENU_STRATEGY_ORDER'
@@ -2104,20 +2077,19 @@ simple_fake_alt2.conf
 XMENU_STRATEGY_ORDER
     while IFS= read -r _priority_name || [ -n "$_priority_name" ]; do
         case "$_priority_name" in ''|*/*|*..*) continue ;; esac
-        [ -f "$_dir/$_priority_name" ] || continue
+        grep -Fxq -- "$_priority_name" "$_catalog" 2>/dev/null || continue
         grep -Fxq -- "$_priority_name" "$_list" 2>/dev/null || printf '%s\n' "$_priority_name" >> "$_list"
     done < "$_priority"
     : > "$_others"
-    for _f in "$_dir"/*.conf; do
-        [ -f "$_f" ] || continue
-        _candidate=${_f##*/}
+    while IFS= read -r _candidate || [ -n "$_candidate" ]; do
+        [ -n "$_candidate" ] || continue
         grep -Fxq -- "$_candidate" "$_list" 2>/dev/null || printf '%s\n' "$_candidate" >> "$_others"
-    done
+    done < "$_catalog"
     if [ -s "$_others" ]; then
         LC_ALL=C sort "$_others" >> "$_list"
     fi
-    rm -f "$_priority" "$_others"
-    [ -s "$_list" ] || { rm -f "$_list" "$_display"; say 'Кэш стратегий пуст.'; return 1; }
+    rm -f "$_priority" "$_others" "$_catalog"
+    [ -s "$_list" ] || { rm -f "$_list" "$_display"; say 'Список стратегий пуст или манифест недоступен.'; return 1; }
 
     # Отмечаем выбранную стратегию по маркеру, затем по совпадению конфига.
     _current_strategy=$(sed -n '1{s/\r$//;p;}' "$ROOT_DIR/active-strategy-nfqws$_ver" 2>/dev/null)
@@ -2159,7 +2131,6 @@ XMENU_STRATEGY_ORDER
         say 'Недопустимые символы в имени стратегии.'
         return 1
     }
-    [ -f "$_dir/$_name" ] || { say 'Стратегия отсутствует в кэше.'; return 1; }
     _rel="strategies/nfqws$_ver/$_name"
     _url_rel=$(printf '%s' "$_rel" | sed 's/ /%20/g')
     _src="$NF_REPO/$_url_rel"; _tmp="$ROOT_DIR/apply-$$.conf"
@@ -2173,6 +2144,13 @@ XMENU_STRATEGY_ORDER
         cp "$_dir/$_name" "$_tmp" || { say 'Не удалось подготовить копию стратегии из кэша.'; return 1; }
     else
         fetch "$_src" "$_tmp" 45 && verify_sum "$_tmp" "$_expected" || { rm -f "$_tmp"; say 'Стратегия не скачалась или SHA256 не совпала.'; return 1; }
+        if mv -f "$_tmp" "$_dir/$_name"; then
+            cp "$_dir/$_name" "$ROOT_DIR/apply-$$.conf" || { say 'Не удалось подготовить загруженную стратегию.'; return 1; }
+        else
+            say 'Не удалось сохранить стратегию в локальный кэш.'
+            return 1
+        fi
+        _tmp="$ROOT_DIR/apply-$$.conf"
     fi
     say "Выбрана стратегия: $_name"
     say 'Будет создан бэкап; сначала проверю/доустановлю нужные blobs, затем заменю конфиг и перезапущу NFQWS.'

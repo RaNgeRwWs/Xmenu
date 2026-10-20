@@ -128,7 +128,82 @@ confirm() { return 0; }
 opkg() { printf '%s\n' "$1" > "$test_dir/dispatched"; }
 opkg_settings_menu >/dev/null
 test "$(cat "$test_dir/dispatched")" = update || fail 'opkg update number wrong'
-version_is_older 1.3.3 1.4.0 || fail 'version ordering'
+version_is_older 1.3.3 1.4.1 || fail 'version ordering'
+
+# Стратегии показываются по кэшированному SHA256SUMS; тела файлов скачиваются
+# только после выбора, устаревший локальный конфиг не должен попасть в меню.
+(
+    strategy_test_root="$test_dir/strategy-lazy-cache"
+    ROOT_DIR="$strategy_test_root/data"
+    CACHE_DIR="$strategy_test_root/cache"
+    XMENU_STRATEGY_SYNC_CACHE="$ROOT_DIR/strategies-sync.cache"
+    strategy_fetch_log="$strategy_test_root/fetch.log"
+    strategy_manifest_fixture="$strategy_test_root/SHA256SUMS"
+    strategy_selected_fixture="$strategy_test_root/alt.conf"
+    strategy_live_conf="$strategy_test_root/nfqws2.conf"
+    mkdir -p "$ROOT_DIR/manifests" "$CACHE_DIR/nfqws2"
+    printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_selected_fixture"
+    printf 'NFQWS_ARGS="--dpi-desync=stale"\n' > "$CACHE_DIR/nfqws2/old.conf"
+    strategy_hash=$(sha256_file "$strategy_selected_fixture")
+    printf '%s  strategies/nfqws2/alt.conf\n' "$strategy_hash" > "$strategy_manifest_fixture"
+    printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_live_conf"
+    ensure_base() { return 0; }
+    fetch() {
+        printf '%s\n' "$1" >> "$strategy_fetch_log"
+        case "$1" in
+            */blobs/SHA256SUMS) : > "$2" ;;
+            */SHA256SUMS) cp "$strategy_manifest_fixture" "$2" ;;
+            */alt.conf) cp "$strategy_selected_fixture" "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    active_conf() { printf '%s|%s' "$strategy_live_conf" "$strategy_test_root/blobs"; }
+    _read_or_eof() { _read_value=${strategy_choice:-0}; return 0; }
+    confirm() { return 1; }
+    strategy_choice=1
+    strategy_menu > "$strategy_test_root/menu.txt" || fail 'lazy strategy menu failed'
+    grep -q 'alt\.conf' "$strategy_test_root/menu.txt" || fail 'manifest strategy missing from menu without a local copy'
+    if grep -q 'old\.conf' "$strategy_test_root/menu.txt"; then fail 'stale unlisted strategy shown in menu'; fi
+    test "$(wc -l < "$strategy_fetch_log" | tr -d ' ')" -eq 2 || fail 'strategy menu downloaded more than manifest and selected config'
+    grep -q '/alt\.conf$' "$strategy_fetch_log" || fail 'selected strategy was not fetched lazily'
+    strategy_choice=0
+    strategy_menu > /dev/null || fail 'cached strategy menu did not reopen'
+    test "$(wc -l < "$strategy_fetch_log" | tr -d ' ')" -eq 2 || fail 'fresh strategy manifest was fetched again'
+    printf 'checked=0\n' > "$XMENU_STRATEGY_SYNC_CACHE"
+    strategy_menu > /dev/null || fail 'expired strategy manifest did not refresh'
+    test "$(wc -l < "$strategy_fetch_log" | tr -d ' ')" -eq 3 || fail 'expired strategy manifest refresh downloaded strategy bodies'
+)
+
+# Повторное открытие выбора стратегий не должно повторно скачивать манифесты
+# и пересчитывать SHA-256, если успешная синхронизация была менее часа назад.
+(
+    strategy_cache_test_root="$test_dir/strategy-sync-cache"
+    ROOT_DIR="$strategy_cache_test_root/data"
+    CACHE_DIR="$strategy_cache_test_root/strategies"
+    XMENU_STRATEGY_SYNC_CACHE="$ROOT_DIR/strategies-sync.cache"
+    strategy_fetch_log="$strategy_cache_test_root/fetch.log"
+    strategy_manifest_fixture="$strategy_cache_test_root/SHA256SUMS"
+    mkdir -p "$ROOT_DIR/manifests" "$CACHE_DIR/nfqws2"
+    printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$CACHE_DIR/nfqws2/alt.conf"
+    strategy_hash=$(sha256_file "$CACHE_DIR/nfqws2/alt.conf")
+    printf '%s  strategies/nfqws2/alt.conf\n' "$strategy_hash" > "$strategy_manifest_fixture"
+    cp "$strategy_manifest_fixture" "$ROOT_DIR/manifests/SHA256SUMS"
+    printf 'checked=%s\n' "$(date +%s)" > "$XMENU_STRATEGY_SYNC_CACHE"
+    ensure_base() { printf 'ensure_base\n' >> "$strategy_fetch_log"; return 0; }
+    fetch() {
+        printf '%s\n' "$1" >> "$strategy_fetch_log"
+        case "$1" in
+            */blobs/SHA256SUMS) : > "$2" ;;
+            */SHA256SUMS) cp "$strategy_manifest_fixture" "$2" ;;
+            *) return 1 ;;
+        esac
+    }
+    sync_strategies || fail 'fresh strategy cache was rejected'
+    test ! -s "$strategy_fetch_log" || fail 'fresh strategy cache performed redundant network work'
+    printf 'checked=0\n' > "$XMENU_STRATEGY_SYNC_CACHE"
+    sync_strategies || fail 'expired strategy cache did not refresh'
+    test -s "$strategy_fetch_log" || fail 'expired strategy cache skipped refresh'
+)
 
 # Ручной выбор открывается и меняет зеркало без сетевых проверок.
 xmenu_opkg_check_mirrors() { fail 'manual selection started availability checks'; }
@@ -162,10 +237,12 @@ done
 CACHE_DIR="$test_dir/strategies"
 ROOT_DIR="$test_dir/strategy-data"
 mkdir -p "$CACHE_DIR/nfqws2" "$ROOT_DIR"
+mkdir -p "$ROOT_DIR/manifests"
 strategy_test_conf="$test_dir/nfqws2.conf"
 printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_test_conf"
 cp "$strategy_test_conf" "$CACHE_DIR/nfqws2/fake_tls_auto_alt2.conf"
 printf 'NFQWS_ARGS="--dpi-desync=none"\n' > "$CACHE_DIR/nfqws2/alt.conf"
+printf '%064d  strategies/nfqws2/alt.conf\n%064d  strategies/nfqws2/fake_tls_auto_alt2.conf\n' 0 0 > "$ROOT_DIR/manifests/SHA256SUMS"
 printf 'alt.conf\n' > "$ROOT_DIR/active-strategy-nfqws2"
 sync_strategies() { return 0; }
 active_conf() { printf '%s|/opt/etc/nfqws2/nfqws2.conf' "$strategy_test_conf"; }
@@ -180,7 +257,7 @@ _XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
 _XMENU_ARCH_CACHE=aarch64
 CYAN=$(printf '\033[36m')
 RESET=$(printf '\033[0m')
-xmenu_cached_remote_version() { printf '1.4.1'; }
+xmenu_cached_remote_version() { printf '1.4.2'; }
 render_component_statuses() {
     say 'Установленные компоненты:'
     component_table_header
@@ -203,7 +280,7 @@ sed "s/$escape\[[0-9;]*m//g" "$test_dir/main-menu.txt" > "$test_dir/plain-menu.t
 update_line=$(grep -n '↑ Доступно обновление' "$test_dir/plain-menu.txt" | cut -d: -f1)
 check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-menu.txt" | cut -d: -f1)
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
-LC_ALL=C awk '/Xmenu ◆ v1.4.0/ {
+LC_ALL=C awk '/Xmenu ◆ v1.4.1/ {
     match($0, /[^ ]/); if (RSTART-1 != 12) exit 1
     title_line=NR; found=1
 } title_line && NR == title_line + 1 && $0 !~ /^=+$/ {exit 1}
