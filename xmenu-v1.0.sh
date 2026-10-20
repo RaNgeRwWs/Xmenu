@@ -1946,9 +1946,9 @@ install_all_nfqw2_blobs_locked() {
     return 0
 }
 
-active_conf() {
-    _ac_nf2_conf=${1:-/opt/etc/nfqws2/nfqws2.conf}
-    _ac_nf1_conf=${2:-/opt/etc/nfqws/nfqws.conf}
+active_conf_from_paths() {
+    _ac_nf2_conf=$1
+    _ac_nf1_conf=$2
     if is_installed nfqws2-keenetic && [ -f "$_ac_nf2_conf" ]; then
         printf '%s|%s' "$_ac_nf2_conf" /opt/etc/nfqws2/blobs
     elif is_installed nfqws-keenetic && [ -f "$_ac_nf1_conf" ]; then
@@ -1959,6 +1959,9 @@ active_conf() {
     elif [ -f "$_ac_nf1_conf" ]; then
         printf '%s|%s' "$_ac_nf1_conf" /opt/etc/nfqws
     else return 1; fi
+}
+active_conf() {
+    active_conf_from_paths /opt/etc/nfqws2/nfqws2.conf /opt/etc/nfqws/nfqws.conf
 }
 normalize_strategy_config() {
     awk -v host1='--hostlist=/opt/etc/nfqws/lists/rkn.list' -v host2='--hostlist=/opt/etc/nfqws2/lists/rkn.list' '

@@ -137,13 +137,13 @@ version_is_older 1.3.3 1.4.1 || fail 'version ordering'
     mkdir -p "$strategy_detect_root/nfqws2" "$strategy_detect_root/nfqws"
     printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_detect_root/nfqws2/nfqws2.conf"
     is_installed() { return 1; }
-    detected=$(active_conf "$strategy_detect_root/nfqws2/nfqws2.conf" "$strategy_detect_root/nfqws/nfqws.conf") ||
+    detected=$(active_conf_from_paths "$strategy_detect_root/nfqws2/nfqws2.conf" "$strategy_detect_root/nfqws/nfqws.conf") ||
         fail 'strategy config was missed when package query failed'
     test "$detected" = "$strategy_detect_root/nfqws2/nfqws2.conf|/opt/etc/nfqws2/blobs" ||
         fail 'NFQWS2 config was detected incorrectly'
     rm -f "$strategy_detect_root/nfqws2/nfqws2.conf"
     printf 'NFQWS_ARGS="--dpi-desync=fake"\n' > "$strategy_detect_root/nfqws/nfqws.conf"
-    detected=$(active_conf "$strategy_detect_root/nfqws2/nfqws2.conf" "$strategy_detect_root/nfqws/nfqws.conf") ||
+    detected=$(active_conf_from_paths "$strategy_detect_root/nfqws2/nfqws2.conf" "$strategy_detect_root/nfqws/nfqws.conf") ||
         fail 'NFQWS v1 config was not used as fallback'
     test "$detected" = "$strategy_detect_root/nfqws/nfqws.conf|/opt/etc/nfqws" ||
         fail 'NFQWS v1 config was detected incorrectly'
