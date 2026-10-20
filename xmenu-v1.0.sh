@@ -2604,8 +2604,12 @@ get_xray_version() {
         printf '%s' 'не найден'
         return 0
     }
-    _v=$(xmenu_run_bounded 3 "$_bin" version 2>&1 | sed -n '1p')
-    _v=${_v:-версия не сообщена}
+    if _v=$(xmenu_run_bounded 3 "$_bin" version 2>&1); then
+        _v=$(printf '%s\n' "$_v" | sed -n '1p')
+    else
+        _v=''
+    fi
+    _v=${_v:-версия неизвестна}
     printf '%s\n' "$_v" > "$_xray_cache" 2>/dev/null || :
     printf '%s' "$_v"
 }
@@ -2628,8 +2632,12 @@ get_mihomo_version() {
         printf '%s' 'не найден'
         return 0
     }
-    _v=$(xmenu_run_bounded 3 "$_bin" -v 2>&1 | sed -n '1p')
-    _v=${_v:-версия не сообщена}
+    if _v=$(xmenu_run_bounded 3 "$_bin" -v 2>&1); then
+        _v=$(printf '%s\n' "$_v" | sed -n '1p')
+    else
+        _v=''
+    fi
+    _v=${_v:-версия неизвестна}
     printf '%s\n' "$_v" > "$_mihomo_cache" 2>/dev/null || :
     printf '%s' "$_v"
 }
