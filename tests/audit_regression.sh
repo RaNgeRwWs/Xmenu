@@ -284,6 +284,25 @@ EOF
     if xmenu_run_bounded 1 sh -c 'exec sleep 5'; then fail 'hanging diagnostic command ignored timeout'; fi
     finished=$(date +%s)
     test "$((finished - started))" -le 3 || fail 'diagnostic timeout took too long'
+    # Без системного timeout безопаснее отказаться от команды, чем запускать её без лимита.
+    mkdir -p "$audit_dir/no-timeout"
+    no_timeout_baseline="$audit_dir/no-timeout-command-baseline"
+    no_timeout_marker="$audit_dir/no-timeout-command-ran"
+    printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_baseline" > "$audit_dir/no-timeout/command"
+    chmod +x "$audit_dir/no-timeout/command"
+    PATH="$audit_dir/no-timeout"
+    export PATH
+    hash -r 2>/dev/null || :
+    "$audit_dir/no-timeout/command"
+    test -e "$no_timeout_baseline" || fail 'no-timeout test command is not executable'
+    printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_marker" > "$audit_dir/no-timeout/command"
+    if xmenu_run_bounded 1 "$audit_dir/no-timeout/command"; then
+        fail 'command without timeout support was reported as bounded'
+    fi
+    test ! -e "$no_timeout_marker" || fail 'command ran without timeout support'
+    PATH="$audit_path"
+    export PATH
+    hash -r 2>/dev/null || :
 )
 
 printf 'PASS: deep audit regression scenarios\n'
