@@ -1947,8 +1947,17 @@ install_all_nfqw2_blobs_locked() {
 }
 
 active_conf() {
-    if is_installed nfqws2-keenetic && [ -f /opt/etc/nfqws2/nfqws2.conf ]; then echo '/opt/etc/nfqws2/nfqws2.conf|/opt/etc/nfqws2/blobs'
-    elif is_installed nfqws-keenetic && [ -f /opt/etc/nfqws/nfqws.conf ]; then echo '/opt/etc/nfqws/nfqws.conf|/opt/etc/nfqws'
+    _ac_nf2_conf=${1:-/opt/etc/nfqws2/nfqws2.conf}
+    _ac_nf1_conf=${2:-/opt/etc/nfqws/nfqws.conf}
+    if is_installed nfqws2-keenetic && [ -f "$_ac_nf2_conf" ]; then
+        printf '%s|%s' "$_ac_nf2_conf" /opt/etc/nfqws2/blobs
+    elif is_installed nfqws-keenetic && [ -f "$_ac_nf1_conf" ]; then
+        printf '%s|%s' "$_ac_nf1_conf" /opt/etc/nfqws
+    elif [ -f "$_ac_nf2_conf" ]; then
+        # Конфиг надёжнее списка opkg, который может быть временно недоступен.
+        printf '%s|%s' "$_ac_nf2_conf" /opt/etc/nfqws2/blobs
+    elif [ -f "$_ac_nf1_conf" ]; then
+        printf '%s|%s' "$_ac_nf1_conf" /opt/etc/nfqws
     else return 1; fi
 }
 normalize_strategy_config() {
@@ -2036,7 +2045,10 @@ strategy_menu() {
 
 strategy_menu_session() {
     sync_strategies || { _rc=$?; [ "$_rc" -eq 130 ] && return 130; return 1; }
-    _active=$(active_conf) || { say 'nfqws/nfqws2 конфиг не найден; сначала установи движок.'; return 1; }
+    _active=$(active_conf) || {
+        say 'Конфиг NFQWS не найден. Проверь /opt/etc/nfqws2/nfqws2.conf и /opt/etc/nfqws/nfqws.conf; если файлов нет, сначала установи движок.'
+        return 1
+    }
     _conf=${_active%%|*}; _default=${_active#*|}
     case "$_conf" in */nfqws2.conf) _ver=2; _dir="$CACHE_DIR/nfqws2";; *) _ver=1; _dir="$CACHE_DIR/nfqws1";; esac
     _list="$ROOT_DIR/strategies-list.$$"
