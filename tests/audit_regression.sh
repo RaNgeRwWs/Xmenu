@@ -290,11 +290,15 @@ EOF
     no_timeout_marker="$audit_dir/no-timeout-command-ran"
     printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_baseline" > "$audit_dir/no-timeout/command"
     chmod +x "$audit_dir/no-timeout/command"
+    printf '#!/usr/bin/bash\nprintf "nfqws2-keenetic - 1.3.1\\n"\n' > "$audit_dir/no-timeout/opkg"
+    chmod +x "$audit_dir/no-timeout/opkg"
     PATH="$audit_dir/no-timeout"
     export PATH
     hash -r 2>/dev/null || :
     "$audit_dir/no-timeout/command"
     test -e "$no_timeout_baseline" || fail 'no-timeout test command is not executable'
+    no_timeout_packages=$(xmenu_run_bounded 1 opkg list-installed) || fail 'local OPKG package query failed without timeout'
+    test "$no_timeout_packages" = 'nfqws2-keenetic - 1.3.1' || fail 'local OPKG package query output changed'
     printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_marker" > "$audit_dir/no-timeout/command"
     if xmenu_run_bounded 1 "$audit_dir/no-timeout/command"; then
         fail 'command without timeout support was reported as bounded'

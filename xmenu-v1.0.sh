@@ -132,8 +132,15 @@ xmenu_run_bounded() {
     elif command -v busybox >/dev/null 2>&1 && busybox timeout "$_xrb_limit" true >/dev/null 2>&1; then
         busybox timeout "$_xrb_limit" "$@"
     else
-        say "${YELLOW}Команда отменена: timeout недоступен, безопасно ограничить время выполнения нельзя.${RESET}" >&2
-        return 127
+        # Эти команды читают только локальную базу пакетов; разрешаем их без
+        # timeout, чтобы отсутствие утилиты не скрывало установленные компоненты.
+        case "${1:-}:${2:-}" in
+            opkg:list-installed|opkg:status) "$@" ;;
+            *)
+                say "${YELLOW}Команда отменена: timeout недоступен, безопасно ограничить время выполнения нельзя.${RESET}" >&2
+                return 127
+                ;;
+        esac
     fi
 }
 
