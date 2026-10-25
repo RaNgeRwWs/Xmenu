@@ -19,7 +19,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
         library.write_text(source.read_text().replace('\nmain "$@"\n', '\n'), encoding="utf-8")
         harness = Path(directory) / "prompt.sh"
         version_file = Path(directory) / "version"
-        version_file.write_text("1.4.1")
+        version_file.write_text("1.4.2")
         ready_file = Path(directory) / "ready"
         setup = 'xmenu_show_pending_update_notice() { :; }\n'
         if pending:
@@ -73,7 +73,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
         try:
             collect_until(b"PROMPT> ")
             if shared:
-                version_file.write_text("1.4.2")
+                version_file.write_text("1.4.3")
                 ready_file.write_text("ready")
                 if shared == "components":
                     time.sleep(1.3)
@@ -86,7 +86,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
             if interrupt:
                 time.sleep(0.2)
                 if pending:
-                    version_file.write_text("1.4.2")
+                    version_file.write_text("1.4.3")
                 process.send_signal(signal.SIGUSR1)
                 time.sleep(0.2)
                 assert process.poll() is None, "menu exited on SIGUSR1"
@@ -100,7 +100,7 @@ def check_input(payload, expected, interrupt=False, delay=0, pending=False, shar
                 assert output.count("↑".encode()) == 1, output.decode(errors="replace")
                 assert b"\x1b7\x1b[" in output, "update was not edited in place"
                 assert output.count(b"\x1b[2J") == 1, "update cleared the entire screen again"
-                assert "v1.4.2".encode() in output
+                assert "v1.4.3".encode() in output
             assert output.count(b"PROMPT> ") == 1, "background result repeated the prompt"
             if shared == "components":
                 assert b"COMPONENTS-READY" not in output, "component refresh printed another menu"
