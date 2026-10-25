@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.4.1 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.4.1"
+# Xmenu ◆ v1.4.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
+APP_VERSION="1.4.2"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 # Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xmenu"
@@ -141,6 +141,20 @@ xmenu_run_bounded() {
                 return 127
                 ;;
         esac
+    fi
+}
+
+# Version probes are short local commands. On BusyBox builds without `timeout`,
+# run them directly, as Xmenu did before 1.4.1, instead of reporting timeout's
+# missing-command status as an incompatible binary or an unknown version.
+xmenu_run_version_probe() {
+    _xrvp_limit=$1
+    shift
+    if command -v timeout >/dev/null 2>&1 ||
+       { command -v busybox >/dev/null 2>&1 && busybox timeout "$_xrvp_limit" true >/dev/null 2>&1; }; then
+        xmenu_run_bounded "$_xrvp_limit" "$@"
+    else
+        "$@"
     fi
 }
 
@@ -1350,7 +1364,7 @@ install_dpi_detector() {
         say "${RED}Установщик завершился, но /opt/bin/dpi-detector не найден или не исполняемый.${RESET}"
         return 1
     }
-    _dpi_version=$(xmenu_run_bounded 3 /opt/bin/dpi-detector --version 2>/dev/null | head -n 1)
+    _dpi_version=$(xmenu_run_version_probe 3 /opt/bin/dpi-detector --version 2>/dev/null | head -n 1)
     case "$_dpi_version" in *[0-9]*) : ;; *) _dpi_version='версия неизвестна' ;; esac
     printf '%s\n' "$_dpi_version" > "$ROOT_DIR/dpi-detector-version" 2>/dev/null || :
     rm -f "$ROOT_DIR/dpi-detector-native-incompatible" "$ROOT_DIR/dpi-detector-python-mode"
@@ -2467,7 +2481,7 @@ launch_dpi() {
 
     # Сначала проверяем --version: это позволяет поймать ELF с отсутствующим loader,
     # не перенаправляя stderr интерактивного TUI в файл.
-    _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
+    _dpi_probe=$(xmenu_run_version_probe 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
     _dpi_probe_rc=$?
     if [ "$_dpi_probe_rc" -eq 126 ] || [ "$_dpi_probe_rc" -eq 127 ] ||
        printf '%s\n' "$_dpi_probe" | grep -qiE 'not found|No such file|No such interpreter'; then
@@ -2477,7 +2491,7 @@ launch_dpi() {
             *) [ -z "$_dpi_probe" ] || printf '%s\n' "$_dpi_probe" | sed -n '1,4p' ;;
         esac
         install_dpi_detector force || return 1
-        _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
+        _dpi_probe=$(xmenu_run_version_probe 3 sh -c 'exec "$1" --version' x "$_dpi_bin" 2>&1)
         _dpi_probe_rc=$?
         if [ "$_dpi_probe_rc" -ne 0 ]; then
             say "${RED}DPI Detector всё ещё не запускается после установки (код $_dpi_probe_rc).${RESET}"
@@ -2539,7 +2553,7 @@ get_xkeen_version() {
     [ -n "$_xkeen_cmd" ] || { [ -x /opt/sbin/xkeen ] && _xkeen_cmd=/opt/sbin/xkeen; }
     [ -n "$_xkeen_cmd" ] || { [ -x /opt/bin/xkeen ] && _xkeen_cmd=/opt/bin/xkeen; }
     if [ -n "$_xkeen_cmd" ]; then
-        _v=$(xmenu_run_bounded 3 "$_xkeen_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
+        _v=$(xmenu_run_version_probe 3 "$_xkeen_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
         version_token_is_valid "$_v" || _v=''
     fi
     if [ -z "$_v" ]; then
@@ -2562,7 +2576,7 @@ get_xkeen_ui_zxc_version() {
         [ -n "$_ui_cmd" ] || { [ -x /opt/sbin/xkeen-ui ] && _ui_cmd=/opt/sbin/xkeen-ui; }
         [ -n "$_ui_cmd" ] || { [ -x /opt/bin/xkeen-ui ] && _ui_cmd=/opt/bin/xkeen-ui; }
         if [ -n "$_ui_cmd" ]; then
-            _v=$(xmenu_run_bounded 3 "$_ui_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
+            _v=$(xmenu_run_version_probe 3 "$_ui_cmd" -v 2>/dev/null | head -n 1 | awk '{print $NF}')
             version_token_is_valid "$_v" || _v=''
         fi
     fi
@@ -2604,7 +2618,7 @@ get_xray_version() {
         printf '%s' 'не найден'
         return 0
     }
-    if _v=$(xmenu_run_bounded 3 "$_bin" version 2>&1); then
+    if _v=$(xmenu_run_version_probe 3 "$_bin" version 2>&1); then
         _v=$(printf '%s\n' "$_v" | sed -n '1p')
     else
         _v=''
@@ -2632,7 +2646,7 @@ get_mihomo_version() {
         printf '%s' 'не найден'
         return 0
     }
-    if _v=$(xmenu_run_bounded 3 "$_bin" -v 2>&1); then
+    if _v=$(xmenu_run_version_probe 3 "$_bin" -v 2>&1); then
         _v=$(printf '%s\n' "$_v" | sed -n '1p')
     else
         _v=''
@@ -2755,7 +2769,7 @@ render_component_statuses_sync() {
         if [ -s "$_dpi_cache" ]; then
             _dpi_v=$(cat "$_dpi_cache" 2>/dev/null)
         else
-            _dpi_probe=$(xmenu_run_bounded 3 sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
+            _dpi_probe=$(xmenu_run_version_probe 3 sh -c 'exec /opt/bin/dpi-detector --version' 2>/dev/null)
             _dpi_probe_rc=$?
             _dpi_v=$(printf '%s\n' "$_dpi_probe" | sed -n '1p')
             if [ "$_dpi_probe_rc" -eq 0 ] && [ -n "$_dpi_v" ]; then
@@ -2776,9 +2790,9 @@ render_component_statuses_sync() {
     if is_installed awg-manager; then print_component 'awg-manager' yes "$(pkg_version awg-manager)"; fi
     if [ -x /opt/keenkit.sh ] || command -v keenkit >/dev/null 2>&1; then print_component 'KeenKit' yes "$(read_version_file /opt/keenkit.version 2>/dev/null || printf 'неизвестна')"; fi
     if [ -x /opt/bin/tg-ws-proxy-rs ]; then
-        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_bounded 3 /opt/bin/tg-ws-proxy-rs --version 2>/dev/null | head -n 1)"
+        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_version_probe 3 /opt/bin/tg-ws-proxy-rs --version 2>/dev/null | head -n 1)"
     elif [ -x /opt/bin/tgwsproxy ] || [ -x /opt/etc/init.d/S99tgwsproxy ]; then
-        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_bounded 3 /opt/bin/tgwsproxy --version 2>/dev/null | head -n 1)"
+        print_component 'TG WS Proxy Rust' yes "$(xmenu_run_version_probe 3 /opt/bin/tgwsproxy --version 2>/dev/null | head -n 1)"
     fi
     _xrv=$(get_xray_version)
     if [ "$_xrv" = 'не найден' ]; then print_component 'Xray' no ''; else print_component 'Xray' yes "$_xrv"; fi

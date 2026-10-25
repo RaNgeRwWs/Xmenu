@@ -294,6 +294,8 @@ EOF
     chmod +x "$audit_dir/no-timeout/opkg"
     printf '#!/usr/bin/bash\nprintf "Mihomo Meta v1.19.32\\n"\n' > "$audit_dir/no-timeout/mihomo"
     chmod +x "$audit_dir/no-timeout/mihomo"
+    printf '#!/usr/bin/bash\nprintf "DPI Detector 1.2.3\\n"\n' > "$audit_dir/no-timeout/dpi-detector"
+    chmod +x "$audit_dir/no-timeout/dpi-detector"
     rm -f "/tmp/xmenu-mihomo-version-$$"
     ln -s "$(command -v sed)" "$audit_dir/no-timeout/sed"
     PATH="$audit_dir/no-timeout"
@@ -304,7 +306,9 @@ EOF
     no_timeout_packages=$(xmenu_run_bounded 1 opkg list-installed) || fail 'local OPKG package query failed without timeout'
     test "$no_timeout_packages" = 'nfqws2-keenetic - 1.3.1' || fail 'local OPKG package query output changed'
     no_timeout_mihomo_version=$(get_mihomo_version)
-    test "$no_timeout_mihomo_version" = 'версия неизвестна' || fail 'timeout warning leaked into Mihomo version'
+    test "$no_timeout_mihomo_version" = 'Mihomo Meta v1.19.32' || fail 'Mihomo version not detected without timeout'
+    no_timeout_dpi_version=$(xmenu_run_version_probe 3 "$audit_dir/no-timeout/dpi-detector" --version) || fail 'DPI version probe failed without timeout'
+    test "$no_timeout_dpi_version" = 'DPI Detector 1.2.3' || fail 'DPI version not detected without timeout'
     printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_marker" > "$audit_dir/no-timeout/command"
     if xmenu_run_bounded 1 "$audit_dir/no-timeout/command"; then
         fail 'command without timeout support was reported as bounded'

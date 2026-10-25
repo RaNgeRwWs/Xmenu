@@ -6,7 +6,7 @@
 
 Управление XKeen, Xray, Mihomo, NFQWS / NFQWS2, Entware и диагностическими утилитами
 
-![Версия](https://img.shields.io/badge/version-v1.4.1-7c3aed)
+![Версия](https://img.shields.io/badge/version-v1.4.2-7c3aed)
 ![Платформа](https://img.shields.io/badge/platform-Keenetic%20%7C%20Netcraze-2563eb)
 ![Shell](https://img.shields.io/badge/shell-POSIX%20sh%20%7C%20BusyBox%20ash-16a34a)
 [Релизы](https://github.com/rangerxxyy/Xmenu/releases) · [Сообщить об ошибке](https://github.com/rangerxxyy/Xmenu/issues)

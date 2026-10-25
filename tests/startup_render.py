@@ -103,7 +103,7 @@ def check_startup(order, rows, columns):
             collect(b"SELECTED=23")
             assert process.wait(timeout=3) == 0
             assert output.count(b"\x1b[2J") == 1, "startup cleared the whole menu more than once"
-            assert output.count("Xmenu ◆ v1.4.1".encode()) == 1, "startup printed a second menu"
+            assert output.count("Xmenu ◆ v1.4.2".encode()) == 1, "startup printed a second menu"
             assert output.count(b"[?]") == 1, "startup repeated the prompt"
             assert output.count(b"v1.4.2") == 1, "update notice duplicated"
             offsets = re.findall(rb"\x1b7\x1b\[(\d+)A", output)
