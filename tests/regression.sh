@@ -299,7 +299,7 @@ sed "s/$escape\[[0-9;]*m//g" "$test_dir/main-menu.txt" > "$test_dir/plain-menu.t
 update_line=$(grep -n '↑ Доступно обновление' "$test_dir/plain-menu.txt" | cut -d: -f1)
 check_line=$(grep -n 'U\. .*Проверить наличие' "$test_dir/plain-menu.txt" | cut -d: -f1)
 test "$update_line" -eq "$((check_line + 1))" || fail 'update notice is not directly below U'
-LC_ALL=C awk '/Xmenu ◆ v1.4.1/ {
+LC_ALL=C awk '/Xmenu ◆ v1.4.2/ {
     match($0, /[^ ]/); if (RSTART-1 != 12) exit 1
     title_line=NR; found=1
 } title_line && NR == title_line + 1 && $0 !~ /^=+$/ {exit 1}
