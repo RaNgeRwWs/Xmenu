@@ -276,7 +276,7 @@ _XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
 _XMENU_ARCH_CACHE=aarch64
 CYAN=$(printf '\033[36m')
 RESET=$(printf '\033[0m')
-xmenu_cached_remote_version() { printf '1.4.2'; }
+xmenu_cached_remote_version() { printf '1.4.3'; }
 render_component_statuses() {
     say 'Установленные компоненты:'
     component_table_header
