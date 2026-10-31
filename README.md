@@ -878,8 +878,8 @@ Xmenu/
 | --- | --- |
 | [nfqws2-menu / nfqws-menu](https://github.com/rndnaame/nfqws-menu) | Основной проект интерактивного меню |
 | [XKeen](https://github.com/jameszeroX/XKeen) | Установка и управление прокси-ядрами, профили Auto, геофайлы и автозагрузка. |
-| [XKeen UI — zxc-rv](https://github.com/zxc-rv/XKeen-UI) | Веб-панель управления XKeen. |
-| [XKeen UI — umarcheh001](https://github.com/umarcheh001/Xkeen-UI) | Альтернативная веб-панель XKeen. |
+| [XKeen UI — zxc-rv](https://github.com/zxc-rv/XKeen-UI) | XKeen UI - панель для управления XKeen. |
+| [XKeen UI — umarcheh001](https://github.com/umarcheh001/Xkeen-UI) | Альтернативная веб-панель XKeen UI. |
 | [nfqws-keenetic](https://github.com/nfqws/nfqws-keenetic) | Пакет NFQWS v1 и его стандартные ресурсы для Keenetic. |
 | [nfqws2-keenetic](https://github.com/nfqws/nfqws2-keenetic) | Пакет NFQWS2, для которого предназначены стратегии и управление ресурсами v2. |
 | [nfqws-keenetic-web](https://github.com/nfqws/nfqws-keenetic-web) | Веб-интерфейс настройки NFQWS. |
