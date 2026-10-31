@@ -297,7 +297,8 @@ EOF
     printf '#!/usr/bin/bash\nprintf "DPI Detector 1.2.3\\n"\n' > "$audit_dir/no-timeout/dpi-detector"
     chmod +x "$audit_dir/no-timeout/dpi-detector"
     rm -f "/tmp/xmenu-mihomo-version-$$"
-    ln -s "$(command -v sed)" "$audit_dir/no-timeout/sed"
+    printf '#!/usr/bin/bash\nexec "%s" "$@"\n' "$(command -v sed)" > "$audit_dir/no-timeout/sed"
+    chmod +x "$audit_dir/no-timeout/sed"
     PATH="$audit_dir/no-timeout"
     export PATH
     hash -r 2>/dev/null || :

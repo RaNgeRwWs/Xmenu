@@ -1,0 +1,5 @@
+/work/
+/docs/superpowers/
+/router-deploy-*.sh
+__pycache__/
+*.pyc

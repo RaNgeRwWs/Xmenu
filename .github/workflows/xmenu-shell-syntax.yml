@@ -5,11 +5,15 @@ on:
     paths:
       - "xmenu-v1.0.sh"
       - "tests/**"
+      - "strategies/**"
+      - "SHA256SUMS"
       - ".github/workflows/xmenu-shell-syntax.yml"
   pull_request:
     paths:
       - "xmenu-v1.0.sh"
       - "tests/**"
+      - "strategies/**"
+      - "SHA256SUMS"
       - ".github/workflows/xmenu-shell-syntax.yml"
 
 jobs:
@@ -20,6 +24,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Validate POSIX shell syntax
         run: sh -n xmenu-v1.0.sh
+      - name: Check release and strategy checksums
+        run: |
+          sha256sum -c SHA256SUMS
+          sha256sum -c strategies/nfqws2/SHA256SUMS
+          for config in strategies/nfqws2/*.conf; do sh -n "$config"; done
       - name: Install audit tools
         run: sudo apt-get update && sudo apt-get install -y busybox shellcheck
       - name: Audit complete script
@@ -28,6 +37,12 @@ jobs:
         run: busybox ash tests/regression.sh
       - name: Run deep audit regression scenarios
         run: busybox ash tests/audit_regression.sh
+      - name: Run service action regression scenarios
+        run: busybox ash tests/service_regression.sh
+      - name: Run NFQWS and DNS regression scenarios
+        run: busybox ash tests/nfqws_features.sh
+      - name: Run native blob and hosts regression scenarios
+        run: busybox ash tests/native_actions.sh
       - name: Check interactive menu input in PTY
         run: python3 tests/menu_input.py
       - name: Check startup frame and background completion in PTY

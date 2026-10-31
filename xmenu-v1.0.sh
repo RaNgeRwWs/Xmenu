@@ -1,8 +1,7 @@
 #!/bin/sh
-# Xmenu ◆ v1.4.2 — Entware / BusyBox ash; based on the v2.4.19 codebase
-APP_VERSION="1.4.2"
+# Xmenu ◆ v1.4.3 — Entware / BusyBox ash
+APP_VERSION="1.4.3"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
-# Сторонние установщики пока не имеют независимой криптографической проверки; закрепление ревизий запланировано для v2.5.0.
 ROOT_DIR="/opt/etc/xmenu"
 BACKUP_DIR="$ROOT_DIR/backups"
 CACHE_DIR="/opt/etc/nfqws-menu/strategies"
@@ -995,8 +994,6 @@ xkeen_channel() {
     printf '%s' 'не удалось определить'
 }
 install_xkeen_stable_binary() {
-    # БЕЗОПАСНОСТЬ: скачиваемый скрипт не имеет независимой криптографической проверки.
-    # Закрепление URL за commit SHA — задача v2.5.0.
     ensure_network || return 1
     require_space 120000 || return 1
     _src="$ROOT_DIR/install-xkeen-upstream.$$"
@@ -1207,13 +1204,8 @@ install_manual_bundle_profile() {
     return 0
 }
 
-install_xkeen() {
-    install_xkeen_auto
-}
 
 install_xkeen_ui() {
-    # БЕЗОПАСНОСТЬ: скачиваемый скрипт не имеет независимой криптографической проверки.
-    # Закрепление URL за commit SHA — задача v2.5.0.
     line; say "${GREEN}XKeen UI — zxc-rv${RESET}"
     ensure_network || return 1
     [ -x /opt/sbin/xkeen ] || { say 'Сначала установи XKeen.'; return 1; }
@@ -2673,12 +2665,6 @@ get_xkeen_ui_umar_version() {
     printf '%s' "${_v:-неизвестна}"
 }
 
-get_xkeen_ui_version() {
-    if xkeen_ui_zxc_is_installed; then get_xkeen_ui_zxc_version
-    elif xkeen_ui_umar_is_installed; then get_xkeen_ui_umar_version
-    else printf '%s' 'не установлен'
-    fi
-}
 
 get_xray_version() {
     _xray_cache="/tmp/xmenu-xray-version-$$"
@@ -3188,7 +3174,48 @@ install_rkn_list() {
 install_tg_ws_proxy_rust() {
     say 'TG WS Proxy Rust — MTProto → WebSocket proxy with local web panel.'
     say 'По умолчанию панель может быть доступна без пароля в LAN; не публикуй порт панели в WAN.'
-    run_nfmenu_action menu_tg_ws_proxy_rs
+    run_remote_installer 'https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_tgws_rs.sh' 'TG WS Proxy Rust' 8000
+}
+
+install_usque_keenetic() {
+    run_remote_installer 'https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_usque.sh' 'usque-keenetic' 2000 || {
+        say "${RED}Установщик usque-keenetic завершился с ошибкой.${RESET}"
+        return 1
+    }
+    invalidate_component_status_cache 2>/dev/null || :
+}
+
+install_firc() {
+    run_remote_installer 'https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_firc.sh' 'firc' 2000 || {
+        say "${RED}Установщик firc завершился с ошибкой.${RESET}"
+        return 1
+    }
+    invalidate_component_status_cache 2>/dev/null || :
+}
+
+install_warpscout() {
+    run_remote_installer 'https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_warpscout.sh' 'warpscout' 2000 || {
+        say "${RED}Установщик warpscout завершился с ошибкой.${RESET}"
+        return 1
+    }
+}
+
+install_magitrickle() {
+    invalidate_component_status_cache || return 1
+    if is_installed magitrickle; then
+        say 'MagiTrickle установлен — проверяю обновление пакета.'
+        opkg update && opkg install magitrickle || return 1
+        if [ -x /opt/etc/init.d/S99magitrickle ]; then
+            /opt/etc/init.d/S99magitrickle restart || return 1
+        else
+            say "${YELLOW}Пакет обновлён, но init-скрипт MagiTrickle не найден.${RESET}"
+        fi
+        return 0
+    fi
+    confirm_yes 'Добавить репозиторий MagiTrickle и установить пакет?' || { say 'Отменено.'; return 0; }
+    run_remote_installer 'http://bin.magitrickle.dev/packages/add_repo.sh' 'MagiTrickle repository bootstrap' 300 || return 1
+    opkg update && opkg install magitrickle || return 1
+    if [ -x /opt/etc/init.d/S99magitrickle ]; then /opt/etc/init.d/S99magitrickle start; fi
 }
 
 install_keenkit() {
@@ -3207,79 +3234,9 @@ install_keenkit() {
 
 install_awg_manager() {
     say 'AWG Manager требует включённый WireGuard-компонент Keenetic.'
-    say 'Будет вызвана установка из актуального nfqws-menu; перед подтверждением проверь репозиторий пакетов и адреса источников.'
+    say 'Установка будет выполнена из отдельного установочного сценария.'
     confirm_yes 'Установить или обновить awg-manager?' || return 0
-    # Use the current upstream nfqws-menu action instead of a stale direct installer URL.
-    run_nfmenu_action menu_awg_manager
-}
-
-nfmenu_final_main_menu_call() {
-    awk '
-        function is_menu_call(s, t) {
-            t=s
-            sub(/[[:space:]]+#.*/, "", t)
-            sub(/^[[:space:]]+/, "", t)
-            sub(/[[:space:]]+$/, "", t)
-            sub(/;$/, "", t)
-            return t=="main_menu" || t=="main_menu \"$@\"" || t=="main_menu \047$@\047" || t=="main_menu $@"
-        }
-        /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
-        { valid=is_menu_call($0) }
-        END { exit(valid ? 0 : 1) }
-    ' "$1"
-}
-
-nfmenu_strip_final_main_menu_call() {
-    awk '
-        function is_menu_call(s, t) {
-            t=s
-            sub(/[[:space:]]+#.*/, "", t)
-            sub(/^[[:space:]]+/, "", t)
-            sub(/[[:space:]]+$/, "", t)
-            sub(/;$/, "", t)
-            return t=="main_menu" || t=="main_menu \"$@\"" || t=="main_menu \047$@\047" || t=="main_menu $@"
-        }
-        {
-            rows[NR]=$0
-            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) next
-            last_content=NR
-            last_is_menu=is_menu_call($0)
-        }
-        END {
-            if (!last_content || !last_is_menu) exit 1
-            for (i=1; i<=NR; i++) if (i!=last_content) print rows[i]
-        }
-    ' "$1"
-}
-
-update_nfmenu_script() {
-    ensure_network || return 1
-    _ufn_target='/opt/nfqws-menu.sh'
-    _ufn_tmp="/opt/nfqws-menu.sh.new.$$"
-    say 'Загружаю официальный nfqws-menu.sh для безопасного обновления...'
-    if ! fetch "$NF_REPO/nfqws-menu.sh" "$_ufn_tmp" 120; then
-        rm -f "$_ufn_tmp"
-        say "${RED}Не удалось загрузить nfqws-menu.sh.${RESET}"
-        return 1
-    fi
-    _ufn_size=$(wc -c < "$_ufn_tmp" 2>/dev/null | tr -d ' ')
-    case "$_ufn_size" in ''|*[!0-9]*) _ufn_size=0 ;; esac
-    if [ "$_ufn_size" -lt 50000 ] || ! grep -q '^SCRIPT_VERSION=' "$_ufn_tmp" ||
-       ! grep -q '^main_menu()' "$_ufn_tmp" ||
-       ! nfmenu_final_main_menu_call "$_ufn_tmp" ||
-       response_looks_like_error_page "$_ufn_tmp" || ! sh -n "$_ufn_tmp"; then
-        rm -f "$_ufn_tmp"
-        say "${RED}Проверка официального nfqws-menu.sh не пройдена; текущий файл не изменён.${RESET}"
-        return 1
-    fi
-    if [ -f "$_ufn_target" ]; then
-        backup_file "$_ufn_target" || { rm -f "$_ufn_tmp"; say "${RED}Не удалось создать резервную копию nfqws-menu.sh.${RESET}"; return 1; }
-    fi
-    chmod 700 "$_ufn_tmp" || { rm -f "$_ufn_tmp"; return 1; }
-    mv -f "$_ufn_tmp" "$_ufn_target" || { rm -f "$_ufn_tmp"; return 1; }
-    chmod 700 "$_ufn_target" 2>/dev/null || :
-    say "${GREEN}Официальный nfqws-menu.sh обновлён. Xmenu оставлен без изменений.${RESET}"
-    return 0
+    run_remote_installer 'https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh' 'awg-manager' 2000
 }
 
 
@@ -3484,10 +3441,10 @@ check_xmenu_update_now() {
     if version_is_older "$APP_VERSION" "$_cxu_version"; then
         if [ "$_cxu_lang" = en ]; then
             say "${CYAN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
-            say 'Choose option 22 — Update Xmenu to install it.'
+            say 'Choose option 20 — Update Xmenu to install it.'
         else
             say "${CYAN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
-            say 'Для установки выбери пункт 22 — «Обновить Xmenu».'
+            say 'Для установки выбери пункт 20 — «Обновить Xmenu». '
         fi
         XMENU_MANUAL_UPDATE_CHECK=0
         return 0
@@ -3655,9 +3612,9 @@ xmenu_show_pending_update_notice() {
     xmenu_valid_version "$_xsp_latest" || return 0
     version_is_older "$APP_VERSION" "$_xsp_latest" || return 0
     if [ "$(get_ui_lang)" = en ]; then
-        _xsp_notice="↑ Update available: Xmenu v$_xsp_latest. Choose option 22 to install it."
+        _xsp_notice="↑ Update available: Xmenu v$_xsp_latest. Choose option 20 to install it."
     else
-        _xsp_notice="↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 22 для установки."
+        _xsp_notice="↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 20 для установки."
     fi
     _xsp_width=$(terminal_width)
     _xsp_length=$(printf '%s' "$_xsp_notice" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
@@ -4239,19 +4196,6 @@ xmenu_opkg_auto_select_mirror() {
     fi
 }
 
-xmenu_opkg_check_selected_mirror() {
-    _ocsm_base=$(xmenu_opkg_active_mirror_url) || { say 'В opkg.conf не найден текущий репозиторий из каталога.'; return 1; }
-    _ocsm_feed=$(xmenu_opkg_feed_path) || return 1
-    xmenu_opkg_mirror_info_by_url "$_ocsm_base" || return 1
-    _ocsm_status=$(xmenu_opkg_probe_mirror "$_ocsm_base" "$_ocsm_feed" 1)
-    if [ "${_ocsm_status%%|*}" = available ]; then
-        _ocsm_rest=${_ocsm_status#*|}; _ocsm_ms=${_ocsm_rest%%|*}
-        say "${GREEN}✓ $XMENU_MIRROR_NAME — доступно (${_ocsm_ms} мс)${RESET}"
-    else
-        say "${RED}✗ $XMENU_MIRROR_NAME — не отвечает. Выбери другой репозиторий или запусти авто-выбор.${RESET}"
-        return 1
-    fi
-}
 
 xmenu_opkg_restore_config() {
     acquire_lock || return 1
@@ -4336,8 +4280,8 @@ opkg_settings_menu() {
             line
             menu_item 1 'Auto-select Entware mirror - check and choose an available source'
             menu_item 2 'Check Entware mirror availability'
-            menu_item 3 'Choose Entware mirror manually - Region, URL and current selection.'
-            menu_item 4 'Restore latest opkg.conf backup'
+            menu_item 3 'Choose Entware mirror manually'
+            menu_item 4 'opkg.conf backups'
             menu_item 5 'Run opkg update'
             menu_item 0 'Back'
             _osm_prompt='[?] Select an option: '
@@ -4347,8 +4291,8 @@ opkg_settings_menu() {
             line
             menu_item 1 'Авто-выбор Entware — проверит и выберет доступное зеркало'
             menu_item 2 'Проверить доступность зеркал Entware'
-            menu_item 3 'Выбрать зеркало Entware вручную - Регион, адрес и текущий выбор.'
-            menu_item 4 'Восстановить копию opkg.conf'
+            menu_item 3 'Выбрать зеркало Entware вручную'
+            menu_item 4 'Копии opkg.conf'
             menu_item 5 'Выполнить opkg update'
             menu_item 0 'Назад'
             _osm_prompt='[?] Выбери пункт: '
@@ -4359,7 +4303,7 @@ opkg_settings_menu() {
             1) xmenu_opkg_auto_select_mirror; pause ;;
             2) xmenu_opkg_check_mirrors 1; pause ;;
             3) xmenu_opkg_manual_mirror_menu ;;
-            4) xmenu_opkg_restore_config; pause ;;
+            4) xmenu_opkg_backups_menu ;;
             5)
                 say 'opkg update обновляет индексы репозитория, но не установленные пакеты.'
                 confirm 'Выполнить opkg update?' && opkg update
@@ -4369,106 +4313,1494 @@ opkg_settings_menu() {
         esac
     done
 }
+
+xmenu_opkg_create_backup() {
+    [ -f /opt/etc/opkg.conf ] || { say 'Файл /opt/etc/opkg.conf не найден.'; return 1; }
+    acquire_lock || return 1
+    backup_file /opt/etc/opkg.conf
+    _ocb_rc=$?
+    release_operation_lock
+    return "$_ocb_rc"
+}
+
+xmenu_opkg_backups_menu() {
+    while :; do
+        line
+        if [ "$(get_ui_lang)" = en ]; then
+            say "${BRIGHT_CYAN}opkg.conf backups${RESET}"
+            menu_item 1 'Create opkg.conf backup'
+            menu_item 2 'Restore opkg.conf backup'
+            menu_item 3 'Delete all opkg.conf backups'
+            menu_item 0 'Back'
+            _obm_prompt='[?] Select an option: '
+        else
+            say "${BRIGHT_CYAN}Копии opkg.conf${RESET}"
+            menu_item 1 'Создать копию opkg.conf'
+            menu_item 2 'Восстановить копию opkg.conf'
+            menu_item 3 'Удалить все копии opkg.conf'
+            menu_item 0 'Назад'
+            _obm_prompt='[?] Выбери пункт: '
+        fi
+        line
+        _read_or_eof "$_obm_prompt" || return 0
+        case "$_read_value" in
+            1) xmenu_opkg_create_backup; pause ;;
+            2) xmenu_opkg_restore_config; pause ;;
+            3) xmenu_opkg_remove_backups; pause ;;
+            0|'') return 0 ;;
+            *) say 'Неверный пункт.' ;;
+        esac
+    done
+}
+
+xmenu_opkg_remove_backups() {
+    _xorb_list="$ROOT_DIR/.opkg-backups-remove.$$"
+    _xorb_config_dir=${XMENU_OPKG_CONFIG_DIR:-/opt/etc}
+    _xorb_backup_dir=${XMENU_OPKG_BACKUP_DIR:-$BACKUP_DIR}
+    mkdir -p "$ROOT_DIR" || return 1
+    : > "$_xorb_list" || return 1
+    if [ -d "$_xorb_config_dir" ] && ! find "$_xorb_config_dir" -maxdepth 1 -type f \
+        \( -name 'opkg.conf.*.bak' -o -name 'opkg.conf.bak*' -o -name 'opkg.conf-*.bak' -o -name 'opkg.conf_*.bak' \) \
+        -print 2>/dev/null >> "$_xorb_list"; then
+        rm -f "$_xorb_list"
+        say "${RED}Не удалось проверить копии opkg.conf в $_xorb_config_dir.${RESET}"
+        return 1
+    fi
+    if [ -d "$_xorb_backup_dir" ] && ! find "$_xorb_backup_dir" -maxdepth 1 -type f \
+        \( -name 'opkg.conf.*.bak' -o -name 'opkg.conf.bak*' -o -name 'opkg.conf-*.bak' -o -name 'opkg.conf_*.bak' \) \
+        -print 2>/dev/null >> "$_xorb_list"; then
+        rm -f "$_xorb_list"
+        say "${RED}Не удалось проверить копии opkg.conf в $_xorb_backup_dir.${RESET}"
+        return 1
+    fi
+    if [ ! -s "$_xorb_list" ]; then
+        rm -f "$_xorb_list"
+        say 'Копии opkg.conf не найдены.'
+        return 0
+    fi
+    _xorb_count=$(wc -l < "$_xorb_list" | tr -d ' ')
+    say "Найдены копии opkg.conf: $_xorb_count"
+    while IFS= read -r _xorb_file || [ -n "$_xorb_file" ]; do
+        [ -n "$_xorb_file" ] && printf '  %s\n' "$_xorb_file"
+    done < "$_xorb_list"
+    confirm_yes 'Удалить перечисленные резервные копии opkg.conf?' || {
+        rm -f "$_xorb_list"
+        say 'Удаление отменено.'
+        return 0
+    }
+    _xorb_removed=0 _xorb_failed=0
+    while IFS= read -r _xorb_file || [ -n "$_xorb_file" ]; do
+        [ -n "$_xorb_file" ] || continue
+        case "$_xorb_file" in
+            "$_xorb_config_dir"/*|"$_xorb_backup_dir"/*) : ;;
+            *) _xorb_failed=$((_xorb_failed + 1)); continue ;;
+        esac
+        if rm -f -- "$_xorb_file"; then _xorb_removed=$((_xorb_removed + 1));
+        else _xorb_failed=$((_xorb_failed + 1)); say "${RED}Не удалось удалить $_xorb_file${RESET}"; fi
+    done < "$_xorb_list"
+    rm -f "$_xorb_list"
+    say "Удалено копий opkg.conf: $_xorb_removed"
+    [ "$_xorb_failed" -eq 0 ]
+}
 change_ui_language() {
     _lang_now=$(get_ui_lang)
     if [ "$_lang_now" = en ]; then set_ui_lang ru; else set_ui_lang en; fi
 }
 
 
-# Executes one action from the current official nfqws-menu without leaving the
-# Xmenu main menu. The downloaded script is syntax-checked and its entry point
-# is replaced only in a temporary /tmp copy; the installed nfqws-menu is untouched.
-run_nfmenu_action() {
-    _rnf_action=${1:-}
-    case "$_rnf_action" in
-        menu_install_nfqws|update_ipset_list|update_rkn_list|menu_dot_doh|menu_change_fake_blob|menu_update_hosts|menu_dns_manage|menu_dpi_detector|menu_awg_manager|menu_keenkit|menu_usque_keenetic|menu_magitrickle|menu_telemt|menu_tg_ws_proxy_rs|remove_tg_ws_proxy_rs|menu_service|opkg_upgrade_all) : ;;
-        *) say "${RED}Неизвестное действие nfqws-menu.${RESET}"; return 2 ;;
-    esac
-    ensure_network || return 1
-    _rnf_src="/tmp/xmenu-nfqws-source-$$.sh"
-    _rnf_download="/tmp/xmenu-nfqws-download-$$.sh"
-    _rnf_run="/tmp/xmenu-nfqws-action-$$.sh"
-    rm -f "$_rnf_run"
-    # Keep the validated upstream file for this process; repeated actions reuse it.
-    _rnf_valid=0
-    if [ -s "$_rnf_src" ]; then
-        _rnf_size=$(wc -c < "$_rnf_src" 2>/dev/null | tr -d ' ')
-        case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
-        _rnf_last=$(tr -d '\r' < "$_rnf_src" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
-        if [ "$_rnf_size" -ge 50000 ] && grep -q '^SCRIPT_VERSION=' "$_rnf_src" && \
-           grep -q '^main_menu()' "$_rnf_src" && nfmenu_final_main_menu_call "$_rnf_src" && \
-           grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_src" && sh -n "$_rnf_src"; then
-            _rnf_valid=1
+# ------------------------------- Service tools -------------------------------
+xmenu_service_menu() {
+    _xsm_lang=$(get_ui_lang)
+    while :; do
+        if [ "$_xsm_lang" = en ]; then
+            say "${BRIGHT_CYAN}[::]  Service (S):${RESET}"
+            menu_item 1 'Dropbear Fix'
+            menu_item 2 'Compress bin/sbin (UPX)'
+            menu_item 3 'Discord Fix (full voice UDP session in nfqws2)'
+            menu_item 0 'Back'
+            _xsm_prompt='[?] Select an option: '
+        else
+            say "${BRIGHT_CYAN}[::]  Сервис (S):${RESET}"
+            menu_item 1 'Dropbear Fix'
+            menu_item 2 'Сжать bin/sbin (UPX)'
+            menu_item 3 'Discord Fix (все UDP-пакеты в nfqws2)'
+            menu_item 0 'Назад'
+            _xsm_prompt='[?] Выбери пункт: '
         fi
-    fi
-    if [ "$_rnf_valid" != 1 ]; then
-        rm -f "$_rnf_src" "$_rnf_download"
-        say "Загружаю официальный nfqws-menu для действия: $_rnf_action"
-        if ! fetch "$NF_REPO/nfqws-menu.sh" "$_rnf_download" 90; then
-            rm -f "$_rnf_download" "$_rnf_run"
-            say "${RED}Не удалось получить актуальный nfqws-menu.${RESET}"
-            return 1
-        fi
-        _rnf_size=$(wc -c < "$_rnf_download" 2>/dev/null | tr -d ' ')
-        case "$_rnf_size" in ''|*[!0-9]*) _rnf_size=0 ;; esac
-        _rnf_last=$(tr -d '\r' < "$_rnf_download" | sed '/^[[:space:]]*$/d' | tail -n 1 | sed 's/[[:space:]]*$//')
-        if [ "$_rnf_size" -lt 50000 ] || response_looks_like_error_page "$_rnf_download" || \
-           ! grep -q '^SCRIPT_VERSION=' "$_rnf_download" || ! grep -q '^main_menu()' "$_rnf_download" || \
-           ! nfmenu_final_main_menu_call "$_rnf_download" || \
-           ! grep -Eq "^${_rnf_action}[[:space:]]*\(\)[[:space:]]*\{" "$_rnf_download" || ! sh -n "$_rnf_download"; then
-            rm -f "$_rnf_download" "$_rnf_run"
-            say "${RED}Проверка источника nfqws-menu не пройдена; выполнение отменено.${RESET}"
-            return 1
-        fi
-        tr -d '\r' < "$_rnf_download" > "$_rnf_src" || { rm -f "$_rnf_download" "$_rnf_src"; return 1; }
-        rm -f "$_rnf_download"
-    fi
-    # Remove only the final nonblank `main_menu` invocation. The awk script
-    # buffers blank lines so interior blank lines (including here-doc content)
-    # are preserved exactly; trailing blank lines are emitted after the last line.
-    if ! nfmenu_strip_final_main_menu_call "$_rnf_src" > "$_rnf_run"; then
-        rm -f "$_rnf_run"
-        return 1
-    fi
-    cat >> "$_rnf_run" <<'XMENU_NFQWS_ACTION_EOF'
-case "${XMENU_NFQWS_ACTION:-menu}" in
-  menu) main_menu ;;
-  menu_install_nfqws) menu_install_nfqws ;;
-  update_ipset_list) update_ipset_list ;;
-  update_rkn_list) update_rkn_list ;;
-  menu_dot_doh) menu_dot_doh ;;
-  menu_change_fake_blob) menu_change_fake_blob ;;
-  menu_update_hosts) menu_update_hosts ;;
-  menu_dns_manage) menu_dns_manage ;;
-  menu_dpi_detector) menu_dpi_detector ;;
-  menu_awg_manager) menu_awg_manager ;;
-  menu_keenkit) menu_keenkit ;;
-  menu_usque_keenetic) menu_usque_keenetic ;;
-  menu_magitrickle) menu_magitrickle ;;
-  menu_telemt) menu_telemt ;;
-  menu_tg_ws_proxy_rs) menu_tg_ws_proxy_rs ;;
-  remove_tg_ws_proxy_rs) remove_tg_ws_proxy_rs ;;
-  menu_service) menu_service ;;
-  opkg_upgrade_all) opkg_upgrade_all ;;
-  *) printf '%s\n' 'Unsupported action' >&2; exit 2 ;;
-esac
-XMENU_NFQWS_ACTION_EOF
-    if ! sh -n "$_rnf_run"; then
-        rm -f "$_rnf_src" "$_rnf_run"
-        say "${RED}Проверка временного сценария nfqws-menu не пройдена.${RESET}"
-        return 1
-    fi
-    _rnf_rc=0
-    if has_controlling_tty; then
-        NFQWS_MENU_LANG="$(get_ui_lang)" XMENU_NFQWS_ACTION="$_rnf_action" sh "$_rnf_run" </dev/tty >/dev/tty 2>&1 || _rnf_rc=$?
-    else
-        NFQWS_MENU_LANG="$(get_ui_lang)" XMENU_NFQWS_ACTION="$_rnf_action" sh "$_rnf_run" || _rnf_rc=$?
-    fi
-    rm -f "$_rnf_run"
-    return "$_rnf_rc"
+        _read_or_eof "$_xsm_prompt" || return 0
+        case "$_read_value" in
+            1) xmenu_dropbear_fix ;;
+            2) xmenu_compress_binsbin ;;
+            3) xmenu_discord_menu ;;
+            0|'') return 0 ;;
+            *) say 'Неверный пункт.' ;;
+        esac
+        say ''
+    done
 }
 
-# The main menu is the single entry point; duplicate unreachable install/service menus were removed.
+xmenu_compress_binsbin() {
+    say 'UPX сожмёт исполняемые файлы только в /opt/bin и /opt/sbin.'
+    say 'Сжатие обратимо командой upx -d; уже сжатые файлы и неподдерживаемые форматы пропускаются.'
+    confirm 'Продолжить сжатие bin/sbin?' || { say 'Отменено.'; return 0; }
+    if ! command -v upx >/dev/null 2>&1; then
+        say 'UPX не найден. Устанавливаю пакет...'
+        opkg update || return 1
+        opkg install upx || return 1
+    fi
+    for _xcbs_dir in "${XMENU_OPTBIN:-/opt/bin}" "${XMENU_OPTSBIN:-/opt/sbin}"; do
+        [ -d "$_xcbs_dir" ] || continue
+        find "$_xcbs_dir" -type f -perm -111 -exec upx --lzma --best {} \; || :
+    done
+    say 'Обработка исполняемых файлов в /opt/bin и /opt/sbin завершена.'
+}
+
+xmenu_dropbear_patch_files() {
+    _xdf_conf=$1 _xdf_init=$2 _xdf_passwd=$3 _xdf_reset=${4:-0}
+    [ -f "$_xdf_conf" ] && [ -f "$_xdf_init" ] || return 1
+    _xdf_stamp="$(date '+%Y%m%d-%H%M%S' 2>/dev/null || printf 'backup')-$$"
+    _xdf_conf_bak="$_xdf_conf.xmenu.$_xdf_stamp.bak"
+    _xdf_init_bak="$_xdf_init.xmenu.$_xdf_stamp.bak"
+    cp -p "$_xdf_conf" "$_xdf_conf_bak" && cp -p "$_xdf_init" "$_xdf_init_bak" || {
+        rm -f "$_xdf_conf_bak" "$_xdf_init_bak"
+        return 1
+    }
+    if [ "$_xdf_reset" = 1 ]; then
+        _xdf_passwd_bak="$_xdf_passwd.xmenu.$_xdf_stamp.bak"
+        cp -p "$_xdf_passwd" "$_xdf_passwd_bak" || {
+            rm -f "$_xdf_conf_bak" "$_xdf_init_bak"
+            return 1
+        }
+    fi
+    if grep -q '^PORT=22$' "$_xdf_conf"; then sed -i 's/^PORT=22$/PORT=222/' "$_xdf_conf"; fi
+    if grep -q 'PIDFILE="/opt/var/run/dropbear.pid"' "$_xdf_init"; then
+        sed -i 's|PIDFILE="/opt/var/run/dropbear.pid"|PIDFILE="/var/run/dropbear.pid"|g' "$_xdf_init"
+    fi
+    if [ "$_xdf_reset" = 1 ] && [ -f "$_xdf_passwd" ]; then
+        sed -i 's#^\(root:\)[^:]*#\1$1$6vKOV7zs$d2EqNYGvlBWEYoFD7FFkr0#' "$_xdf_passwd"
+    fi
+    if ! grep -q '^PORT=222$' "$_xdf_conf" || ! grep -q 'PIDFILE="/var/run/dropbear.pid"' "$_xdf_init"; then
+        cp -p "$_xdf_conf_bak" "$_xdf_conf"
+        cp -p "$_xdf_init_bak" "$_xdf_init"
+        [ "$_xdf_reset" = 1 ] && cp -p "$_xdf_passwd_bak" "$_xdf_passwd"
+        return 1
+    fi
+    if [ "$_xdf_reset" = 1 ] && ! grep -Fq 'root:$1$6vKOV7zs$d2EqNYGvlBWEYoFD7FFkr0:' "$_xdf_passwd"; then
+        cp -p "$_xdf_conf_bak" "$_xdf_conf"
+        cp -p "$_xdf_init_bak" "$_xdf_init"
+        cp -p "$_xdf_passwd_bak" "$_xdf_passwd"
+        return 1
+    fi
+    return 0
+}
+
+xmenu_dropbear_fix() {
+    _xdf_conf=${XMENU_DROPBEAR_CONF:-/opt/etc/config/dropbear.conf}
+    _xdf_init=${XMENU_DROPBEAR_INIT:-/opt/etc/init.d/S51dropbear}
+    _xdf_passwd=${XMENU_ENTWARE_PASSWD:-/opt/etc/passwd}
+    _xdf_log=${XMENU_DROPBEAR_LOG:-/tmp/xmenu-dropbear-restart.log}
+    [ -f "$_xdf_conf" ] || { say "${RED}Не найден $_xdf_conf.${RESET}"; return 1; }
+    [ -f "$_xdf_init" ] || { say "${RED}Не найден $_xdf_init — Entware Dropbear не установлен.${RESET}"; return 1; }
+    command -v nohup >/dev/null 2>&1 || { say "${RED}Не найден nohup; исправление отменено, чтобы сохранить доступ по SSH.${RESET}"; return 1; }
+    say '  1) Исправить порт и PIDFILE без смены пароля'
+    say '  2) То же исправление со сбросом пароля root Entware на keenetic'
+    say '  0) Назад'
+    _read_or_eof '[?] Выбери пункт: ' || return 0
+    case "$_read_value" in
+        1) _xdf_reset=0 ;;
+        2)
+            confirm_no 'Сбросить пароль root Entware на известный пароль keenetic?' || { say 'Отменено.'; return 0; }
+            [ -f "$_xdf_passwd" ] || { say "${RED}Не найден $_xdf_passwd; пароль не изменён.${RESET}"; return 1; }
+            _xdf_reset=1 ;;
+        0|'') return 0 ;;
+        *) say 'Неверный выбор.'; return 1 ;;
+    esac
+    _xdf_port=$(sed -n 's/^PORT=//p' "$_xdf_conf" | head -n 1 | tr -d '\r')
+    case "$_xdf_port" in ''|*[!0-9]*) _xdf_port=222 ;; esac
+    say 'Будут изменены PORT 22 → 222 и PIDFILE /opt/var/run → /var/run.'
+    say 'Entware Dropbear будет перезапущен в фоне, текущая SSH-сессия оборвётся.'
+    if [ "$_xdf_reset" = 1 ]; then say 'Пароль root Entware станет keenetic.'; fi
+    confirm 'Продолжить исправление и перезапустить Dropbear?' || { say 'Отменено.'; return 0; }
+    xmenu_dropbear_patch_files "$_xdf_conf" "$_xdf_init" "$_xdf_passwd" "$_xdf_reset" || {
+        say "${RED}Изменения не прошли проверку; исходные настройки восстановлены.${RESET}"
+        return 1
+    }
+    _xdf_port=$(sed -n 's/^PORT=//p' "$_xdf_conf" | head -n 1 | tr -d '\r')
+    rm -f "$_xdf_log"
+    nohup sh -c "trap '' HUP; sleep 2; '$_xdf_init' stop >>'$_xdf_log' 2>&1 || true; killall -9 dropbear >>'$_xdf_log' 2>&1 || true; rm -f /opt/var/run/dropbear.pid /var/run/dropbear.pid; sleep 1; '$_xdf_init' start >>'$_xdf_log' 2>&1 || /opt/sbin/dropbear -p '$_xdf_port' >>'$_xdf_log' 2>&1" </dev/null >>"$_xdf_log" 2>&1 &
+    say "Перезапуск запланирован на порту $_xdf_port. Резервные копии сохранены рядом с конфигом и init-файлом; журнал: $_xdf_log"
+}
+
+xmenu_discord_config_value() {
+    _xdcv_key=$1 _xdcv_file=$2
+    [ -f "$_xdcv_file" ] || return 0
+    {
+        sed -n "s/^[[:space:]]*${_xdcv_key}[[:space:]]*=[[:space:]]*//p" "$_xdcv_file"
+        [ -f "$_xdcv_file.run" ] && sed -n "s/^[[:space:]]*${_xdcv_key}[[:space:]]*=[[:space:]]*//p" "$_xdcv_file.run"
+    } | tail -n 1 | tr -d "'\"\r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+xmenu_discord_ports() {
+    _xdp_ports=$(xmenu_discord_config_value PORTS "${XMENU_DISCORD_CONF:-${XMENU_DISCORD_DIR:-/opt/etc/nfqws2-fullsession}/fullsession.conf}")
+    [ -n "$_xdp_ports" ] || _xdp_ports='19294:19344,50000:50100'
+    case "$_xdp_ports" in *[!0-9,:-]*|'') return 1 ;; esac
+    printf '%s\n' "$_xdp_ports"
+}
+
+xmenu_discord_config() {
+    _xdc_file=${XMENU_NFQWS2_CONF:-/opt/etc/nfqws2/nfqws2.conf}
+    _xdc_iface=$(xmenu_discord_config_value ISP_INTERFACE "$_xdc_file")
+    _xdc_queue=$(xmenu_discord_config_value NFQUEUE_NUM "$_xdc_file")
+    _xdc_mark=$(xmenu_discord_config_value POLICY_MARK "$_xdc_file")
+    _xdc_exclude=$(xmenu_discord_config_value POLICY_EXCLUDE "$_xdc_file")
+    [ -n "$_xdc_iface" ] || _xdc_iface=eth3
+    [ -n "$_xdc_queue" ] || _xdc_queue=300
+    case "$_xdc_queue" in *[!0-9]*|'') _xdc_queue=300 ;; esac
+    case "$_xdc_mark" in *[!0-9A-Fa-fxX./]*) _xdc_mark='' ;; esac
+    case "$_xdc_exclude" in 0|1) : ;; *) _xdc_exclude=0 ;; esac
+    XMENU_DISCORD_IFACES=$_xdc_iface
+    XMENU_DISCORD_QUEUE=$_xdc_queue
+    XMENU_DISCORD_POLICY_MARK=$_xdc_mark
+    XMENU_DISCORD_POLICY_EXCLUDE=$_xdc_exclude
+}
+
+xmenu_discord_nfqws2_ready() {
+    _xdnr_init=${XMENU_NFQWS2_INIT:-/opt/etc/init.d/S51nfqws2}
+    _xdnr_conf=${XMENU_NFQWS2_CONF:-/opt/etc/nfqws2/nfqws2.conf}
+    [ -f "$_xdnr_init" ] && [ -f "$_xdnr_conf" ]
+}
+
+xmenu_discord_ppe_available() {
+    _xdpa_chain="XDP$$"
+    iptables -w -t mangle -N "$_xdpa_chain" 2>/dev/null || return 1
+    _xdpa_rc=1
+    iptables -w -t mangle -A "$_xdpa_chain" -j PPE 2>/dev/null && _xdpa_rc=0
+    iptables -w -t mangle -F "$_xdpa_chain" 2>/dev/null || :
+    iptables -w -t mangle -X "$_xdpa_chain" 2>/dev/null || :
+    return "$_xdpa_rc"
+}
+
+xmenu_discord_chain_sync() {
+    _xdcs_chain=$1 _xdcs_parent=$2 _xdcs_rules=$3
+    _xdcs_tmp="${_xdcs_chain}_new"
+    iptables -w -t mangle -N "$_xdcs_tmp" 2>/dev/null || :
+    iptables -w -t mangle -F "$_xdcs_tmp" || return 1
+    printf '%s\n' "$_xdcs_rules" | while IFS= read -r _xdcs_rule; do
+        [ -n "$_xdcs_rule" ] || continue
+        # shellcheck disable=SC2086
+        iptables -w -t mangle -A "$_xdcs_tmp" $_xdcs_rule || exit 1
+    done || { iptables -w -t mangle -F "$_xdcs_tmp"; iptables -w -t mangle -X "$_xdcs_tmp"; return 1; }
+    iptables -w -t mangle -I "$_xdcs_parent" -j "$_xdcs_tmp" || {
+        iptables -w -t mangle -F "$_xdcs_tmp"; iptables -w -t mangle -X "$_xdcs_tmp"; return 1;
+    }
+    while iptables -w -t mangle -C "$_xdcs_parent" -j "$_xdcs_chain" 2>/dev/null; do
+        iptables -w -t mangle -D "$_xdcs_parent" -j "$_xdcs_chain" || return 1
+    done
+    iptables -w -t mangle -F "$_xdcs_chain" 2>/dev/null || :
+    iptables -w -t mangle -X "$_xdcs_chain" 2>/dev/null || :
+    iptables -w -t mangle -E "$_xdcs_tmp" "$_xdcs_chain"
+}
+
+xmenu_discord_rules_remove_chain() {
+    _xdrr_chain=$1 _xdrr_parent=$2
+    while iptables -w -t mangle -C "$_xdrr_parent" -j "$_xdrr_chain" 2>/dev/null; do
+        iptables -w -t mangle -D "$_xdrr_parent" -j "$_xdrr_chain" || return 1
+    done
+    iptables -w -t mangle -F "$_xdrr_chain" 2>/dev/null || :
+    iptables -w -t mangle -X "$_xdrr_chain" 2>/dev/null || :
+}
+
+xmenu_discord_rules_remove() {
+    xmenu_discord_rules_remove_chain xmenu_discord_post POSTROUTING
+    xmenu_discord_rules_remove_chain xmenu_discord_fwd FORWARD
+}
+
+xmenu_discord_rules_apply() {
+    _xdra_state=${XMENU_DISCORD_CONF:-${XMENU_DISCORD_DIR:-/opt/etc/nfqws2-fullsession}/fullsession.conf}
+    [ -s "$_xdra_state" ] || return 0
+    xmenu_discord_nfqws2_ready || { say 'nfqws2 не установлен или не найден его конфиг.'; return 1; }
+    xmenu_discord_config
+    _xdra_ports=$(xmenu_discord_ports) || { say 'Недопустимый список Discord-портов.'; return 1; }
+    _xdra_post='' _xdra_fwd=''
+    for _xdra_iface in $XMENU_DISCORD_IFACES; do
+        case "$_xdra_iface" in *[!A-Za-z0-9_.:-]*|'') continue ;; esac
+        if [ -n "$XMENU_DISCORD_POLICY_MARK" ]; then
+            _xdra_policy=''
+            [ "$XMENU_DISCORD_POLICY_EXCLUDE" = 1 ] || _xdra_policy='! '
+            _xdra_post="$_xdra_post-o $_xdra_iface -m mark ${_xdra_policy}--mark $XMENU_DISCORD_POLICY_MARK -j RETURN
+"
+            _xdra_fwd="$_xdra_fwd-o $_xdra_iface -m mark ${_xdra_policy}--mark $XMENU_DISCORD_POLICY_MARK -j RETURN
+"
+        fi
+        _xdra_post="$_xdra_post-o $_xdra_iface -m mark ! --mark 0x40000000/0x40000000 -p udp -m multiport --dports $_xdra_ports -j NFQUEUE --queue-num $XMENU_DISCORD_QUEUE --queue-bypass
+"
+        _xdra_fwd="$_xdra_fwd-o $_xdra_iface -p udp -m multiport --dports $_xdra_ports -j PPE
+-i $_xdra_iface -p udp -m multiport --sports $_xdra_ports -j PPE
+"
+    done
+    [ -n "$_xdra_post" ] || { say 'Не найдены подходящие значения ISP_INTERFACE.'; return 1; }
+    if xmenu_discord_ppe_available; then
+        xmenu_discord_chain_sync xmenu_discord_fwd FORWARD "$_xdra_fwd" || return 1
+    else
+        xmenu_discord_rules_remove_chain xmenu_discord_fwd FORWARD || :
+        say 'Цель PPE недоступна; очередь NFQUEUE установлена, но fastpath исключение недоступно.'
+    fi
+    # Match the upstream ordering: exclude Discord flows from PPE before
+    # installing NFQUEUE, so early packets cannot escape to fastpath.
+    xmenu_discord_chain_sync xmenu_discord_post POSTROUTING "$_xdra_post" || return 1
+}
+
+xmenu_discord_enable() {
+    _xde_dir=${XMENU_DISCORD_DIR:-/opt/etc/nfqws2-fullsession}
+    _xde_conf=${XMENU_DISCORD_CONF:-$_xde_dir/fullsession.conf}
+    _xde_init=${XMENU_DISCORD_INIT:-/opt/etc/init.d/S52xmenu-discord-fullsession}
+    _xde_hook=${XMENU_DISCORD_HOOK:-/opt/etc/ndm/netfilter.d/101-xmenu-discord-fullsession.sh}
+    xmenu_discord_nfqws2_ready || { say 'Для Discord Fix сначала установи nfqws2.'; return 1; }
+    mkdir -p "$_xde_dir" "$(dirname "$_xde_init")" "$(dirname "$_xde_hook")" || return 1
+    _xde_ports=$(xmenu_discord_ports) || { say 'Недопустимый список Discord-портов.'; return 1; }
+    _xde_tmp="$_xde_conf.tmp.$$"
+    printf 'PORTS=%s\n' "$_xde_ports" > "$_xde_tmp" && mv "$_xde_tmp" "$_xde_conf" || return 1
+    _xde_bin=${XMENU_BIN_PATH:-/opt/bin/xmenu}
+    cat > "$_xde_hook" <<EOF
+#!/bin/sh
+[ "\$type" = iptables ] && [ "\$table" = mangle ] || exit 0
+[ -s $_xde_conf ] && $_xde_bin discord-fix-rules >/dev/null 2>&1
+exit 0
+EOF
+    cat > "$_xde_init" <<EOF
+#!/bin/sh
+case "\$1" in
+  start|restart) $_xde_bin discord-fix-rules ;;
+  stop) $_xde_bin discord-fix-unrules ;;
+  status) $_xde_bin discord-fix-status ;;
+  *) echo "Usage: \$0 {start|stop|restart|status}"; exit 1 ;;
+esac
+EOF
+    chmod 700 "$_xde_hook" "$_xde_init" || return 1
+    xmenu_discord_rules_apply || {
+        xmenu_discord_rules_remove
+        rm -f "$_xde_hook" "$_xde_init" "$_xde_conf"
+        return 1
+    }
+    say 'Discord Fix включён: UDP-сессии направляются в NFQWS2, правила восстановятся при загрузке.'
+}
+
+xmenu_discord_disable() {
+    _xdd_conf=${XMENU_DISCORD_CONF:-${XMENU_DISCORD_DIR:-/opt/etc/nfqws2-fullsession}/fullsession.conf}
+    _xdd_init=${XMENU_DISCORD_INIT:-/opt/etc/init.d/S52xmenu-discord-fullsession}
+    _xdd_hook=${XMENU_DISCORD_HOOK:-/opt/etc/ndm/netfilter.d/101-xmenu-discord-fullsession.sh}
+    confirm 'Выключить Discord Fix и удалить его правила?' || { say 'Отменено.'; return 0; }
+    xmenu_discord_rules_remove
+    rm -f "$_xdd_hook" "$_xdd_init" "$_xdd_conf"
+    say 'Discord Fix выключен; собственные правила, hook и init-файл удалены.'
+}
+
+xmenu_discord_status() {
+    _xds_conf=${XMENU_DISCORD_CONF:-${XMENU_DISCORD_DIR:-/opt/etc/nfqws2-fullsession}/fullsession.conf}
+    if [ -s "$_xds_conf" ]; then
+        _xds_ports=$(xmenu_discord_ports)
+        say "Discord Fix: включён (UDP-порты $_xds_ports)."
+    else
+        say 'Discord Fix: выключен.'
+    fi
+    if pidof nfqws2 >/dev/null 2>&1; then say 'nfqws2: запущен.'; else say 'nfqws2: не запущен.'; fi
+    _xds_save=$(iptables-save -t mangle 2>/dev/null || :)
+    _xds_post=$(printf '%s\n' "$_xds_save" | grep -E -- '-A xmenu_discord_post .*NFQUEUE' | wc -l | tr -d ' ')
+    _xds_ppe=$(printf '%s\n' "$_xds_save" | grep -E -- '-A xmenu_discord_fwd .* -j PPE' | wc -l | tr -d ' ')
+    say "Правила полной UDP-сессии: NFQUEUE=$_xds_post, PPE=$_xds_ppe."
+    xmenu_discord_ppe_available && say 'PPE: доступно.' || say 'PPE: недоступно; NFQUEUE продолжает работать.'
+    if [ -x /opt/sbin/xkeen ]; then
+        _xds_exclude=${XMENU_XKEEN_EXCLUDE:-/opt/etc/xkeen/port_exclude.lst}
+        if grep -q '19294:19344' "$_xds_exclude" 2>/dev/null && grep -q '50000:50100' "$_xds_exclude" 2>/dev/null; then
+            say 'XKeen: Discord-порты исключены.'
+        else
+            say 'XKeen: порты Discord ещё не исключены.'
+        fi
+    fi
+}
+
+xmenu_discord_xkeen_exclude() {
+    _xdx_file=${XMENU_XKEEN_EXCLUDE:-/opt/etc/xkeen/port_exclude.lst}
+    [ -x /opt/sbin/xkeen ] || { say 'XKeen не найден.'; return 1; }
+    _xdx_dir=$(dirname "$_xdx_file")
+    mkdir -p "$_xdx_dir" || return 1
+    if [ -f "$_xdx_file" ]; then
+        _xdx_bak="$_xdx_file.xmenu.$(date '+%Y%m%d-%H%M%S').bak"
+        cp -p "$_xdx_file" "$_xdx_bak" || return 1
+        touch "$_xdx_file"
+    else
+        : > "$_xdx_file" || return 1
+    fi
+    grep -Fxq '19294:19344' "$_xdx_file" || printf '%s\n' '19294:19344' >> "$_xdx_file"
+    grep -Fxq '50000:50100' "$_xdx_file" || printf '%s\n' '50000:50100' >> "$_xdx_file"
+    say "Discord-порты добавлены в $_xdx_file."
+    if pidof xray >/dev/null 2>&1 && confirm 'Перезапустить XKeen сейчас?'; then
+        /opt/sbin/xkeen -restart >/dev/null 2>&1 && say 'XKeen перезапускается.'
+    fi
+}
+
+xmenu_discord_menu() {
+    xmenu_discord_nfqws2_ready || { say 'Для Discord Fix сначала установи nfqws2 (пункт 4).'; return 1; }
+    _xdm_lang=$(get_ui_lang)
+    while :; do
+        if [ "$_xdm_lang" = en ]; then
+            say "${BRIGHT_CYAN}Discord: full voice UDP session in nfqws2${RESET}"
+            menu_item 1 'Status / diagnostics'
+            menu_item 2 'Enable fix'
+            menu_item 3 'Disable fix'
+            [ -x /opt/sbin/xkeen ] && menu_item 4 'XKeen: exclude Discord ports'
+            menu_item 0 'Back'
+            _xdm_prompt='[?] Select an option: '
+        else
+            say "${BRIGHT_CYAN}Discord: весь голосовой UDP-трафик в nfqws2${RESET}"
+            menu_item 1 'Статус / диагностика'
+            menu_item 2 'Включить фикс'
+            menu_item 3 'Выключить фикс'
+            [ -x /opt/sbin/xkeen ] && menu_item 4 'XKeen: исключить порты Discord'
+            menu_item 0 'Назад'
+            _xdm_prompt='[?] Выбери пункт: '
+        fi
+        _read_or_eof "$_xdm_prompt" || return 0
+        case "$_read_value" in
+            1) xmenu_discord_status ;;
+            2) xmenu_discord_enable ;;
+            3) xmenu_discord_disable ;;
+            4) xmenu_discord_xkeen_exclude ;;
+            0|'') return 0 ;;
+            *) say 'Неверный пункт.' ;;
+        esac
+        say ''
+    done
+}
+
+# DNS server and filter tools use local Keenetic CLI operations.
+xmenu_dns_valid_host() {
+    printf '%s\n' "${1:-}" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:%-]*$' &&
+        ! printf '%s\n' "$1" | grep -q '\.\.'
+}
+
+xmenu_dns_valid_domain() {
+    printf '%s\n' "${1:-}" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$' &&
+        ! printf '%s\n' "$1" | grep -q '\.\.'
+}
+
+xmenu_dns_valid_port() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    awk -v n="$1" 'BEGIN { exit !(n >= 1 && n <= 65535) }'
+}
+
+xmenu_dns_valid_uri() {
+    printf '%s\n' "${1:-}" | LC_ALL=C grep -Eq '^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[A-Za-z0-9._~:/?#@%+=&-]*)?$'
+}
+
+xmenu_dns_ndmc() {
+    LD_LIBRARY_PATH=/lib:/usr/lib ndmc -c "$*"
+}
+
+xmenu_dns_save() {
+    if xmenu_dns_ndmc 'system configuration save' >/dev/null 2>&1; then
+        say 'Конфигурация Keenetic сохранена.'
+    else
+        say "${RED}Не удалось сохранить конфигурацию Keenetic.${RESET}"
+        return 1
+    fi
+}
+
+xmenu_dns_show() {
+    command -v ndmc >/dev/null 2>&1 || { say 'ndmc не найден: управление DNS доступно только на Keenetic/Netcraze OS.'; return 1; }
+    say "${BRIGHT_CYAN}DNS-серверы Keenetic${RESET}"
+    say ''
+    {
+        xmenu_dns_ndmc 'show dns-proxy' 2>/dev/null
+        printf '\nXMENU_RUNNING_CONFIG\n'
+        xmenu_dns_ndmc 'show running-config' 2>/dev/null
+    } | awk '
+        function save_server(   value,key) {
+            value = (kind == "DoT" ? address : uri)
+            if (value != "") {
+                if (kind == "DoT" && port != "" && port != "853") value = value ":" port
+                if (sni != "") value = value " (" sni ")"
+                if (domain != "") value = value " → " domain
+                key = scope "|" kind "|" value
+                if (filter && !seen[key]++) filters[++nf] = kind ": " value " [" scope "]"
+                else if (!filter && scope == "System" && !seen[key]++) {
+                    if (kind == "DoT") dot[++nt] = value
+                    else doh[++nh] = value
+                }
+            }
+            address = uri = port = sni = domain = ""
+        }
+        /^XMENU_RUNNING_CONFIG$/ { save_server(); config = 1; next }
+        config {
+            if ($1 == "dns-proxy" && $2 == "filter" && $3 == "profile" && ($5 == "tls" || $5 == "https") && $6 == "upstream") {
+                value = ($5 == "tls" ? "DoT: " : "DoH: ") $7
+                if ($5 == "tls" && $8 ~ /^[0-9]+$/ && $8 != "853") value = value ":" $8
+                if (!profile_seen[value]++) profiles[++np] = $4 ": " value
+            }
+            if ($1 == "dns-proxy" && $2 == "filter" && $3 == "assign" && ($4 == "host" || $4 == "interface")) {
+                value = ($4 == "host" ? "Устройство " : "Сеть ") $6 ": " $7
+                if (!assign_seen[value]++) assignments[++na] = value
+            }
+            next
+        }
+        /^[[:space:]]*proxy-name:/ { save_server(); scope = $2; kind = ""; filter = 0; next }
+        /^[[:space:]]*proxy-(tls|https)(-filters)?:/ {
+            save_server(); filter = ($1 ~ /-filters:/); kind = ($1 ~ /https/ ? "DoH" : "DoT"); next
+        }
+        /^[[:space:]]*proxy-[A-Za-z-]+:/ { save_server(); kind = ""; next }
+        /^[[:space:]]*server-(tls|https):/ { save_server(); kind = ($1 ~ /https/ ? "DoH" : "DoT"); next }
+        kind != "" && $1 == "address:" { address = $2; next }
+        kind != "" && $1 == "port:" { port = $2; next }
+        kind != "" && $1 == "sni:" { sni = $2; next }
+        kind != "" && $1 == "uri:" { uri = $2; next }
+        kind != "" && $1 == "domain:" { domain = $2; next }
+        /^[[:space:]]*dns_server[[:space:]]*=/ {
+            if ($3 != "" && $3 !~ /^127\./ && $3 !~ /^\[?::1\]?(:|$)/ && !plain_seen[$3]++) plain[++nn] = $3
+            next
+        }
+        END {
+            save_server()
+            print "Интернет-фильтры"
+            if (nf + np + na == 0) print "Отдельные DNS-серверы фильтров не настроены."
+            for (i = 1; i <= nf; i++) print "" filters[i]
+            for (i = 1; i <= np; i++) print "" profiles[i]
+            for (i = 1; i <= na; i++) print "" assignments[i]
+            if (nn > 0) {
+                print ""
+                print "DNS без шифрования"
+                for (i = 1; i <= nn; i++) print "" plain[i]
+            }
+            print ""
+            print "Общие DNS: DoT " nt+0 "/8 · DoH " nh+0 "/8"
+            for (i = 1; i <= nt; i++) print "DoT: " dot[i]
+            for (i = 1; i <= nh; i++) print "DoH: " doh[i]
+            if (nt + nh == 0) print "Дополнительные серверы не добавлены."
+            else print "Запросы к этим серверам передаются с шифрованием."
+        }
+    '
+    say ''
+    say 'DoT и DoH шифруют DNS-запросы.'
+    say 'Общие серверы и DNS интернет-фильтров настраиваются отдельно.'
+}
+
+xmenu_dns_apply_dot() {
+    _xdda_host=$1 _xdda_port=$2 _xdda_sni=$3 _xdda_domain=$4
+    xmenu_dns_valid_host "$_xdda_host" || { say 'Некорректный адрес DoT.'; return 1; }
+    [ -z "$_xdda_port" ] || xmenu_dns_valid_port "$_xdda_port" || { say 'Порт должен быть числом от 1 до 65535.'; return 1; }
+    [ -z "$_xdda_sni" ] || xmenu_dns_valid_domain "$_xdda_sni" || { say 'Некорректное имя SNI.'; return 1; }
+    [ -z "$_xdda_domain" ] || xmenu_dns_valid_domain "$_xdda_domain" || { say 'Некорректный домен привязки.'; return 1; }
+    _xdda_cmd="dns-proxy tls upstream $_xdda_host"
+    [ -z "$_xdda_port" ] || _xdda_cmd="$_xdda_cmd $_xdda_port"
+    [ -z "$_xdda_sni" ] || _xdda_cmd="$_xdda_cmd sni $_xdda_sni"
+    [ -z "$_xdda_domain" ] || _xdda_cmd="$_xdda_cmd domain $_xdda_domain"
+    xmenu_dns_ndmc "$_xdda_cmd" >/dev/null 2>&1 || { say "${RED}ndmc отклонил добавление DoT: $_xdda_host${RESET}"; return 1; }
+    return 0
+}
+
+xmenu_dns_apply_doh() {
+    _xddh_uri=$1 _xddh_domain=$2
+    xmenu_dns_valid_uri "$_xddh_uri" || { say 'Разрешён только корректный HTTPS URI DoH без пробелов и управляющих символов.'; return 1; }
+    [ -z "$_xddh_domain" ] || xmenu_dns_valid_domain "$_xddh_domain" || { say 'Некорректный домен привязки.'; return 1; }
+    _xddh_cmd="dns-proxy https upstream $_xddh_uri"
+    [ -z "$_xddh_domain" ] || _xddh_cmd="$_xddh_cmd domain $_xddh_domain"
+    xmenu_dns_ndmc "$_xddh_cmd" >/dev/null 2>&1 || { say "${RED}ndmc отклонил добавление DoH: $_xddh_uri${RESET}"; return 1; }
+    return 0
+}
+
+xmenu_dns_dot_data() {
+    cat <<'EOF'
+1|Yandex|77.88.8.8|common.dot.dns.yandex.net|
+2|Cloudflare|1.1.1.1|cloudflare-dns.com|
+3|Google|8.8.8.8|dns.google|
+4|Quad9|9.9.9.9|dns.quad9.net|
+5|CleanBrowsing|185.228.168.9|security-filter-dns.cleanbrowsing.org|853
+6|OpenDNS|208.67.222.222|dns.opendns.com|
+7|AdGuard Default|94.140.14.14|dns.adguard-dns.com|
+8|AdGuard Family|94.140.14.15|family.adguard-dns.com|
+9|ControlD Free|p0.freedns.controld.com|p0.freedns.controld.com|
+10|DNS.SB|185.222.222.222|dot.sb|
+11|DNS4EU Protective|protective.joindns4.eu|protective.joindns4.eu|
+12|Alibaba DNS|dns.alidns.com|dns.alidns.com|
+13|DNSPod|dot.pub|dot.pub|
+14|Xbox-DNS|xbox-dns.ru|xbox-dns.ru|
+15|Comss DNS|dns.comss.one|dns.comss.one|
+16|Malw Link|dns.malw.link|dns.malw.link|
+17|NullsProxy|dns.nullsproxy.com|dns.nullsproxy.com|
+18|Geo Hide|geohide.ru|geohide.ru|
+19|AstraCat|dns.astracat.network|dns.astracat.network|
+20|Bezmezhau|dns.bezmezhau.com|dns.bezmezhau.com|
+21|DNS-AI|dns.dns-ai.ru|dns.dns-ai.ru|
+22|Mafioznik|dns.mafioznik.xyz|dns.mafioznik.xyz|
+23|Shecan Free|free.shecan.ir|free.shecan.ir|
+EOF
+}
+
+xmenu_dns_doh_data() {
+    cat <<'EOF'
+1|Yandex|https://77.88.8.8/dns-query
+2|Cloudflare|https://cloudflare-dns.com/dns-query
+3|Google|https://dns.google/dns-query
+4|Quad9|https://dns.quad9.net/dns-query
+5|CleanBrowsing|https://doh.cleanbrowsing.org/doh/security-filter/
+6|OpenDNS|https://doh.opendns.com/dns-query
+7|AdGuard Default|https://dns.adguard-dns.com/dns-query
+8|AdGuard Family|https://family.adguard-dns.com/dns-query
+9|ControlD Free|https://freedns.controld.com/p0
+10|DNS.SB|https://doh.dns.sb/dns-query
+11|DNS4EU Protective|https://protective.joindns4.eu/dns-query
+12|DNS4EU Unfiltered|https://unfiltered.joindns4.eu/dns-query
+13|Alibaba DNS|https://dns.alidns.com/dns-query
+14|DNSPod|https://doh.pub/dns-query
+15|Xbox-DNS|https://xbox-dns.ru/dns-query
+16|Comss DNS|https://dns.comss.one/dns-query
+17|Malw Link|https://dns.malw.link/dns-query
+18|NullsProxy|https://dns.nullsproxy.com/dns-query
+19|Geo Hide|https://dns.geohide.ru/dns-query
+20|AstraCat|https://dns.astracat.network/dns-query
+21|Bezmezhau|https://dns.bezmezhau.com/dns-query
+22|DNS-AI|https://dns.dns-ai.ru/dns-query
+23|Mafioznik|https://dns.mafioznik.xyz/dns-query
+24|Shecan Free|https://free.shecan.ir/dns-query
+EOF
+}
+
+xmenu_dns_add_menu() {
+    _xdadd_kind=$1
+    if [ "$_xdadd_kind" = dot ]; then
+        xmenu_dns_dot_data | while IFS='|' read -r n label host sni _port; do
+            say "  $n) $label — $host${sni:+ (SNI $sni)}"
+        done
+        say "${BRIGHT_CYAN}  99) Ввести вручную${RESET}"
+    else
+        xmenu_dns_doh_data | while IFS='|' read -r n label uri; do say "  $n) $label — $uri"; done
+        say "${BRIGHT_CYAN}  99) Ввести вручную${RESET}"
+    fi
+    say '  0) Назад'
+    _read_or_eof 'Номера серверов через запятую: ' || return 1
+    _xdadd_choices=$(printf '%s' "$_read_value" | tr ',' ' ')
+    if ! printf '%s\n' "$_xdadd_choices" | LC_ALL=C grep -Eq '^[0-9 ]*$'; then say 'Неверный список номеров.'; return 1; fi
+    _read_or_eof 'Привязать серверы к домену (Enter — общие): ' || return 1
+    _xdadd_domain=$_read_value
+    [ -z "$_xdadd_domain" ] || xmenu_dns_valid_domain "$_xdadd_domain" || { say 'Некорректный домен.'; return 1; }
+    _xdadd_added=0
+    for _xdadd_choice in $_xdadd_choices; do
+        [ "$_xdadd_choice" = 0 ] && continue
+        if [ "$_xdadd_kind" = dot ]; then
+            if [ "$_xdadd_choice" = 99 ]; then
+                _read_or_eof 'Адрес DoT: ' || return 1; _xdadd_host=$_read_value
+                _read_or_eof 'Порт (Enter — 853): ' || return 1; _xdadd_port=$_read_value
+                _read_or_eof 'SNI (Enter — без SNI): ' || return 1; _xdadd_sni=$_read_value
+            else
+                _xdadd_row=$(xmenu_dns_dot_data | awk -F'|' -v n="$_xdadd_choice" '$1 == n {print; exit}')
+                [ -n "$_xdadd_row" ] || continue
+                IFS='|' read -r _xdadd_n _xdadd_label _xdadd_host _xdadd_sni _xdadd_port <<EOF
+$_xdadd_row
+EOF
+            fi
+            if xmenu_dns_apply_dot "$_xdadd_host" "$_xdadd_port" "$_xdadd_sni" "$_xdadd_domain"; then _xdadd_added=1; fi
+        else
+            if [ "$_xdadd_choice" = 99 ]; then
+                _read_or_eof 'HTTPS URI DoH: ' || return 1; _xdadd_uri=$_read_value
+            else
+                _xdadd_row=$(xmenu_dns_doh_data | awk -F'|' -v n="$_xdadd_choice" '$1 == n {print; exit}')
+                [ -n "$_xdadd_row" ] || continue
+                IFS='|' read -r _xdadd_n _xdadd_label _xdadd_uri <<EOF
+$_xdadd_row
+EOF
+            fi
+            if xmenu_dns_apply_doh "$_xdadd_uri" "$_xdadd_domain"; then _xdadd_added=1; fi
+        fi
+    done
+    [ "$_xdadd_added" = 1 ] && xmenu_dns_save
+}
+
+xmenu_dns_domain_presets() {
+    say '1) CleanBrowsing DoT -> instagram.com'
+    say '2) CleanBrowsing DoH -> instagram.com'
+    say '3) CleanBrowsing DoT -> cdninstagram.com'
+    say '4) CleanBrowsing DoH -> cdninstagram.com'
+    say '5) sw.ext.io DoT -> rutor.is и rutor.info'
+    say '6) Malw Link DoH -> ntc.party'
+    say '7) Xbox-DNS DoT -> Twitch'
+    say '8) Xbox-DNS DoH -> Twitch'
+    say '9) NullsProxy DoT -> домены Supercell'
+    say '10) NullsProxy DoH -> домены Supercell'
+    say '0) Назад'
+    _read_or_eof 'Выбери пресет: ' || return 1
+    _xdpr_added=0
+    case "$_read_value" in
+        1) xmenu_dns_apply_dot 185.228.168.9 853 security-filter-dns.cleanbrowsing.org instagram.com && _xdpr_added=1 ;;
+        2) xmenu_dns_apply_doh https://doh.cleanbrowsing.org/doh/security-filter/ instagram.com && _xdpr_added=1 ;;
+        3) xmenu_dns_apply_dot 185.228.168.9 853 security-filter-dns.cleanbrowsing.org cdninstagram.com && _xdpr_added=1 ;;
+        4) xmenu_dns_apply_doh https://doh.cleanbrowsing.org/doh/security-filter/ cdninstagram.com && _xdpr_added=1 ;;
+        5) xmenu_dns_apply_dot sw.ext.io '' '' rutor.is && xmenu_dns_apply_dot sw.ext.io '' '' rutor.info && _xdpr_added=1 ;;
+        6) xmenu_dns_apply_doh https://dns.malw.link/dns-query ntc.party && _xdpr_added=1 ;;
+        7) xmenu_dns_apply_dot xbox-dns.ru 853 xbox-dns.ru gql.twitch.tv && xmenu_dns_apply_dot xbox-dns.ru 853 xbox-dns.ru usher.ttvnw.net && _xdpr_added=1 ;;
+        8) xmenu_dns_apply_doh https://xbox-dns.ru/dns-query gql.twitch.tv && xmenu_dns_apply_doh https://xbox-dns.ru/dns-query usher.ttvnw.net && _xdpr_added=1 ;;
+        9|10)
+            for _xdpr_domain in supercell.com supercellid.com brawlstarsgame.com clashofclans.com clashroyaleapp.com; do
+                if [ "$_read_value" = 9 ]; then xmenu_dns_apply_dot dns.nullsproxy.com 853 dns.nullsproxy.com "$_xdpr_domain" && _xdpr_added=1
+                else xmenu_dns_apply_doh https://dns.nullsproxy.com/dns-query "$_xdpr_domain" && _xdpr_added=1; fi
+            done
+            ;;
+        0|'') return 0 ;;
+        *) say 'Неизвестный пресет.'; return 1 ;;
+    esac
+    [ "$_xdpr_added" = 1 ] && xmenu_dns_save
+}
+
+xmenu_dns_remove_menu() {
+    _xdrem_tmp="${ROOT_DIR}/.dns-upstreams.$$"
+    mkdir -p "$ROOT_DIR" || return 1
+    umask 077
+    xmenu_dns_ndmc 'show dns-proxy' 2>/dev/null | awk '
+        function emit() {if(type=="dot") print "dot|" addr "|" port "|" domain; else if(type=="doh") print "doh|" uri "||" domain}
+        /^ *proxy-name:/ {if(type=="dot"&&addr!="") emit(); if(type=="doh"&&uri!="") emit(); scope=$2; type=""; addr=port=uri=domain=""; next}
+        /^ *proxy-tls:/ {type=(scope=="System"?"dot":""); next}
+        /^ *proxy-https:/ {if(type=="dot"&&addr!="") emit(); type=(scope=="System"?"doh":""); next}
+        /^ *proxy-tls-filters:/ || /^ *proxy-https-filters:/ {if(type=="dot"&&addr!="") emit(); if(type=="doh"&&uri!="") emit(); type=""; next}
+        /^ *server-tls:/ {if(type=="dot"&&addr!="") emit(); type=(scope=="System"?"dot":""); addr=port=domain=""; next}
+        /^ *server-https:/ {if(type=="doh"&&uri!="") emit(); type=(scope=="System"?"doh":""); uri=domain=""; next}
+        type=="dot"&&$1=="address:" {addr=$2; next}
+        type=="dot"&&$1=="port:" {port=$2; next}
+        type=="dot"&&$1=="domain:" {domain=$2; next}
+        type=="doh"&&$1=="uri:" {uri=$2; next}
+        type=="doh"&&$1=="domain:" {domain=$2; next}
+        END {if(type=="dot"&&addr!="") emit(); if(type=="doh"&&uri!="") emit()}
+    ' > "$_xdrem_tmp"
+    if [ ! -s "$_xdrem_tmp" ]; then rm -f "$_xdrem_tmp"; say 'Общие DoT/DoH серверы не найдены.'; return 0; fi
+    say 'Общие upstream серверы (записи интернет-фильтров не удаляются этим пунктом):'
+    _xdrem_n=0
+    while IFS='|' read -r _xdrem_type _xdrem_target _xdrem_port _xdrem_domain; do
+        _xdrem_n=$((_xdrem_n + 1))
+        printf '  %s) %s %s %s %s\n' "$_xdrem_n" "$_xdrem_type" "$_xdrem_target" "$_xdrem_port" "$_xdrem_domain"
+    done < "$_xdrem_tmp"
+    _read_or_eof 'Номера для удаления через запятую (0 — назад): ' || { rm -f "$_xdrem_tmp"; return 1; }
+    _xdrem_choices=$(printf '%s' "$_read_value" | tr ',' ' ')
+    if ! printf '%s\n' "$_xdrem_choices" | LC_ALL=C grep -Eq '^[0-9 ]*$'; then rm -f "$_xdrem_tmp"; say 'Неверный список номеров.'; return 1; fi
+    _xdrem_changed=0
+    for _xdrem_choice in $_xdrem_choices; do
+        case "$_xdrem_choice" in ''|0) continue ;; esac
+        _xdrem_row=$(awk -F'|' -v n="$_xdrem_choice" 'NR==n {print; exit}' "$_xdrem_tmp")
+        [ -n "$_xdrem_row" ] || continue
+        IFS='|' read -r _xdrem_type _xdrem_target _xdrem_port _xdrem_domain <<EOF
+$_xdrem_row
+EOF
+        if [ "$_xdrem_type" = dot ]; then
+            xmenu_dns_valid_host "$_xdrem_target" || continue
+            _xdrem_cmd="no dns-proxy tls upstream $_xdrem_target"
+            if [ -n "$_xdrem_port" ] && [ "$_xdrem_port" != 853 ]; then
+                xmenu_dns_valid_port "$_xdrem_port" || continue
+                _xdrem_cmd="$_xdrem_cmd $_xdrem_port"
+            fi
+        else
+            xmenu_dns_valid_uri "$_xdrem_target" || continue
+            _xdrem_cmd="no dns-proxy https upstream $_xdrem_target"
+        fi
+        if xmenu_dns_ndmc "$_xdrem_cmd" >/dev/null 2>&1; then _xdrem_changed=1; fi
+    done
+    rm -f "$_xdrem_tmp"
+    [ "$_xdrem_changed" = 1 ] && xmenu_dns_save
+}
+
+xmenu_dns_manage_menu() {
+    command -v ndmc >/dev/null 2>&1 || { say 'ndmc не найден: управление DNS доступно только на Keenetic/Netcraze OS.'; return 1; }
+    while :; do
+        xmenu_dns_show
+        say ''
+        say '1. Добавить DoT'
+        say '2. Добавить DoH'
+        say '3. Привязать домен к DNS (пресеты)'
+        say '4. Удалить общие DNS-серверы'
+        say '0. Назад'
+        _read_or_eof 'Выбери пункт: ' || return 0
+        case "$_read_value" in
+            1) xmenu_dns_add_menu dot ;;
+            2) xmenu_dns_add_menu doh ;;
+            3) xmenu_dns_domain_presets ;;
+            4) xmenu_dns_remove_menu ;;
+            0|'') return 0 ;;
+            *) say 'Неверный пункт.' ;;
+        esac
+    done
+}
+
+# IPSet sources and paths follow the official nfqws-menu choices. Files are
+# staged and checked before existing lists are backed up or replaced.
+XMENU_IPSET_FLOWSEAL_URL='https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/refs/heads/main/.service/ipset-service.txt'
+XMENU_IPSET_NFQWS1_URL='https://raw.githubusercontent.com/nfqws/nfqws-keenetic/master/etc/nfqws/ipset.list'
+XMENU_IPSET_NFQWS2_URL='https://raw.githubusercontent.com/nfqws/nfqws2-keenetic/master/etc/nfqws2/lists/ipset.list'
+
+xmenu_ipset_clean_file() {
+    _xic_src=$1 _xic_dest=$2
+    awk '!/^[[:space:]]*([#;]|$)/ { gsub(/[ \t\r]+$/, ""); if ($0 != "") print }' "$_xic_src" > "$_xic_dest" || return 1
+    XMENU_IPSET_COUNT=$(wc -l < "$_xic_dest" 2>/dev/null | tr -d ' ')
+    case "$XMENU_IPSET_COUNT" in ''|*[!0-9]*|0) return 1 ;; esac
+}
+
+xmenu_ipset_fetch_clean() {
+    _xif_url=$1 _xif_dest=$2 _xif_raw="$_xif_dest.raw"
+    say "Загружаю IP/CIDR список: $_xif_url"
+    fetch "$_xif_url" "$_xif_raw" 90 || { rm -f "$_xif_raw" "$_xif_dest"; return 1; }
+    if response_looks_like_error_page "$_xif_raw"; then
+        rm -f "$_xif_raw" "$_xif_dest"
+        say 'Вместо IP/CIDR-списка получена страница ошибки; исходный список сохранён.'
+        return 1
+    fi
+    xmenu_ipset_clean_file "$_xif_raw" "$_xif_dest" || {
+        rm -f "$_xif_raw" "$_xif_dest"
+        say "${RED}Список пуст или не содержит строк с адресами.${RESET}"
+        return 1
+    }
+    rm -f "$_xif_raw"
+    say "Подготовлено записей: $XMENU_IPSET_COUNT"
+}
+
+xmenu_ipset_target() {
+    case "$1" in
+        1) printf '%s\n' "${XMENU_NFQWS1_IPSET:-/opt/etc/nfqws/ipset.list}" ;;
+        2) printf '%s\n' "${XMENU_NFQWS2_IPSET:-/opt/etc/nfqws2/lists/ipset.list}" ;;
+        *) return 1 ;;
+    esac
+}
+
+xmenu_ipset_init() {
+    case "$1" in
+        1) printf '%s\n' "${XMENU_NFQWS1_INIT:-/opt/etc/init.d/S51nfqws}" ;;
+        2) printf '%s\n' "${XMENU_NFQWS2_INIT:-/opt/etc/init.d/S51nfqws2}" ;;
+        *) return 1 ;;
+    esac
+}
+
+xmenu_ipset_restart_service() {
+    _xirs_init=$1
+    if [ -x "$_xirs_init" ]; then
+        "$_xirs_init" restart
+    else
+        say "${YELLOW}Не найден init-скрипт NFQWS: $_xirs_init${RESET}"
+        return 1
+    fi
+}
+
+xmenu_ipset_apply_file() {
+    _xia_ver=$1 _xia_source=$2
+    _xia_target=$(xmenu_ipset_target "$_xia_ver") || return 1
+    _xia_dir=${_xia_target%/*}
+    [ ! -L "$_xia_target" ] || { say "${RED}Путь списка является симлинком; запись отменена: $_xia_target${RESET}"; return 1; }
+    [ ! -e "$_xia_target" ] || [ -f "$_xia_target" ] || { say "${RED}Путь списка не является обычным файлом: $_xia_target${RESET}"; return 1; }
+    mkdir -p "$_xia_dir" || return 1
+    _xia_stage=$(mktemp "$_xia_dir/.ipset.list.xmenu.XXXXXX") || return 1
+    cp "$_xia_source" "$_xia_stage" && chmod 644 "$_xia_stage" || { rm -f "$_xia_stage"; return 1; }
+    backup_file "$_xia_target" || { rm -f "$_xia_stage"; return 1; }
+    mv -f "$_xia_stage" "$_xia_target" || { rm -f "$_xia_stage"; return 1; }
+    say "${GREEN}Список записан: $_xia_target${RESET}"
+    _xia_init=$(xmenu_ipset_init "$_xia_ver") || return 1
+    xmenu_ipset_restart_service "$_xia_init" || { say "${RED}Список обновлён, но сервис не перезапустился.${RESET}"; return 1; }
+    return 0
+}
+
+xmenu_update_ipset_list() {
+    _xui_has1=0 _xui_has2=0
+    is_installed nfqws-keenetic && _xui_has1=1
+    is_installed nfqws2-keenetic && _xui_has2=1
+    if [ "$_xui_has1" -eq 0 ] && [ "$_xui_has2" -eq 0 ]; then
+        say 'Для обновления IPSet нужен установленный nfqws-keenetic или nfqws2-keenetic.'
+        return 1
+    fi
+    say 'IPSet — список IP/CIDR для применения стратегии.'
+    say 'Flowseal — большой список Discord/YouTube, он может заметно увеличить размер набора.'
+    say 'Стандартный источник берётся из репозитория выбранной версии NFQWS.'
+    menu_item 1 'Загрузить большой список Flowseal (Discord/YouTube)'
+    menu_item 2 'Загрузить стандартный IPSet для пакета'
+    menu_item 0 'Назад'
+    _read_or_eof 'Источник IPSet: ' || return 0
+    _xui_source=$_read_value
+    case "$_xui_source" in 1|2) ;; 0|'') return 0 ;; *) say 'Выбери 1, 2 или 0.'; return 1 ;; esac
+
+    if [ "$_xui_has1" -eq 1 ] && [ "$_xui_has2" -eq 1 ]; then
+        say 'Установлены обе версии NFQWS.'
+        menu_item 1 'Обновить nfqws-keenetic (v1)'
+        menu_item 2 'Обновить nfqws2-keenetic (v2)'
+        menu_item a 'Обновить обе версии'
+        menu_item 0 'Отмена'
+        _read_or_eof 'Выбери версию: ' || return 0
+        case "$_read_value" in
+            1) _xui_versions='1' ;;
+            2) _xui_versions='2' ;;
+            a|A) _xui_versions='1 2' ;;
+            *) return 0 ;;
+        esac
+    elif [ "$_xui_has1" -eq 1 ]; then
+        _xui_versions=1
+    else
+        _xui_versions=2
+    fi
+    ensure_network || return 1
+
+    _xui_work="${TMPDIR:-/tmp}/xmenu-ipset-$$"
+    (umask 077 && mkdir "$_xui_work") || return 1
+    _xui_rc=0
+    for _xui_ver in $_xui_versions; do
+        case "$_xui_ver:$_xui_source" in
+            1:1|2:1) _xui_url=$XMENU_IPSET_FLOWSEAL_URL ;;
+            1:2) _xui_url=$XMENU_IPSET_NFQWS1_URL ;;
+            2:2) _xui_url=$XMENU_IPSET_NFQWS2_URL ;;
+        esac
+        if ! xmenu_ipset_fetch_clean "$_xui_url" "$_xui_work/nfqws$_xui_ver.list"; then
+            _xui_rc=1
+            break
+        fi
+    done
+    if [ "$_xui_rc" -eq 0 ]; then
+        for _xui_ver in $_xui_versions; do
+            xmenu_ipset_apply_file "$_xui_ver" "$_xui_work/nfqws$_xui_ver.list" || { _xui_rc=1; break; }
+        done
+    fi
+    rm -rf "$_xui_work"
+    return "$_xui_rc"
+}
+
+xmenu_nfqws_config_path() {
+    case "$1" in
+        1) printf '%s\n' "${XMENU_NFQWS1_CONF:-/opt/etc/nfqws/nfqws.conf}" ;;
+        2) printf '%s\n' "${XMENU_NFQWS2_CONF:-/opt/etc/nfqws2/nfqws2.conf}" ;;
+        *) return 1 ;;
+    esac
+}
+
+xmenu_nfqws_init_path() {
+    case "$1" in
+        1) printf '%s\n' "${XMENU_NFQWS1_INIT:-/opt/etc/init.d/S51nfqws}" ;;
+        2) printf '%s\n' "${XMENU_NFQWS2_INIT:-/opt/etc/init.d/S51nfqws2}" ;;
+        *) return 1 ;;
+    esac
+}
+
+xmenu_dot_doh_fallback() {
+    case "$1" in
+        1) cat <<'XMENU_DOT_DOH_V1'
+#DNS
+--filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/opt/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--new
+--filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.120,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/opt/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--new
+--filter-udp=443,853 --filter-l7=quic --hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com --dpi-desync=ipfrag2 --dpi-desync-ipfrag-pos-udp=88
+XMENU_DOT_DOH_V1
+        ;;
+        2) cat <<'XMENU_DOT_DOH_V2'
+#DNS
+--filter-tcp=443,853
+--filter-l7=http,tls
+--hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir
+--out-range=-d10
+--payload=tls_client_hello,http_req
+--lua-desync=multisplit:pos=1,host+2,midsld+2,endsld-2:seqovl=4:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3
+--new
+--filter-tcp=443,853
+--filter-l7=http,tls
+--ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80
+--out-range=-d10
+--payload=tls_client_hello,http_req
+--lua-desync=multisplit:pos=1,27:seqovl=4:tcp_ts_up
+--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3
+--new
+--filter-udp=443,853
+--filter-l7=quic
+--hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com
+--payload=quic_initial
+--lua-desync=send:ipfrag:ipfrag_pos_udp=88
+XMENU_DOT_DOH_V2
+        ;;
+        *) return 1 ;;
+    esac
+}
+
+xmenu_dot_doh_load_strategy() {
+    _xdls_ver=$1 _xdls_dest=$2
+    _xdls_raw="$_xdls_dest.raw"
+    if fetch "$NF_REPO/strategies/dns_filter_nfqws$_xdls_ver" "$_xdls_raw" 45 &&
+       [ -s "$_xdls_raw" ] && ! response_looks_like_error_page "$_xdls_raw"; then
+        tr -d '\r' < "$_xdls_raw" | sed '/^[[:space:]]*$/d' > "$_xdls_dest"
+        rm -f "$_xdls_raw"
+        grep -q '^--filter-tcp=' "$_xdls_dest" || { rm -f "$_xdls_dest"; return 1; }
+        say "${GREEN}Загружена стратегия dns_filter_nfqws$_xdls_ver.${RESET}"
+        return 0
+    fi
+    rm -f "$_xdls_raw"
+    say "${YELLOW}GitHub недоступен; использую встроенный fallback dns_filter_nfqws$_xdls_ver.${RESET}"
+    xmenu_dot_doh_fallback "$_xdls_ver" > "$_xdls_dest"
+}
+
+xmenu_dot_doh_inject_strategy() {
+    _xdis_conf=$1 _xdis_strategy=$2 _xdis_out=$3
+    _xdis_found=0 _xdis_open=0 _xdis_has=0
+    : > "$_xdis_out" || return 1
+    while IFS= read -r _xdis_line || [ -n "$_xdis_line" ]; do
+        if [ "$_xdis_open" -eq 0 ]; then
+            case "$_xdis_line" in
+                NFQWS_ARGS_CUSTOM=\"\")
+                    _xdis_found=1
+                    printf 'NFQWS_ARGS_CUSTOM="\n' >> "$_xdis_out"
+                    cat "$_xdis_strategy" >> "$_xdis_out"
+                    printf '"\n' >> "$_xdis_out"
+                    ;;
+                NFQWS_ARGS_CUSTOM=\")
+                    _xdis_found=1 _xdis_open=1
+                    printf '%s\n' "$_xdis_line" >> "$_xdis_out"
+                    ;;
+                NFQWS_ARGS_CUSTOM=\"*\")
+                    _xdis_found=1
+                    _xdis_body=${_xdis_line#NFQWS_ARGS_CUSTOM=\"}; _xdis_body=${_xdis_body%\"}
+                    printf 'NFQWS_ARGS_CUSTOM="\n' >> "$_xdis_out"
+                    if [ -n "$(printf '%s' "$_xdis_body" | tr -d '[:space:]')" ]; then
+                        printf '%s\n--new\n' "$_xdis_body" >> "$_xdis_out"
+                    fi
+                    cat "$_xdis_strategy" >> "$_xdis_out"
+                    printf '"\n' >> "$_xdis_out"
+                    ;;
+                NFQWS_ARGS_CUSTOM=\"*)
+                    _xdis_found=1 _xdis_open=1 _xdis_has=1
+                    printf '%s\n' "$_xdis_line" >> "$_xdis_out"
+                    ;;
+                *) printf '%s\n' "$_xdis_line" >> "$_xdis_out" ;;
+            esac
+        else
+            case "$_xdis_line" in
+                \"|[[:space:]]*\")
+                    [ "$_xdis_has" -eq 1 ] && printf '%s\n' '--new' >> "$_xdis_out"
+                    cat "$_xdis_strategy" >> "$_xdis_out"
+                    printf '%s\n' "$_xdis_line" >> "$_xdis_out"
+                    _xdis_open=0
+                    ;;
+                *\")
+                    _xdis_body=${_xdis_line%\"}
+                    if [ -n "$(printf '%s' "$_xdis_body" | tr -d '[:space:]\\')" ]; then
+                        printf '%s\n' "$_xdis_body" >> "$_xdis_out"
+                        _xdis_has=1
+                    fi
+                    [ "$_xdis_has" -eq 1 ] && printf '%s\n' '--new' >> "$_xdis_out"
+                    cat "$_xdis_strategy" >> "$_xdis_out"
+                    printf '"\n' >> "$_xdis_out"
+                    _xdis_open=0
+                    ;;
+                *)
+                    [ -z "$(printf '%s' "$_xdis_line" | tr -d '[:space:]\\')" ] || _xdis_has=1
+                    printf '%s\n' "$_xdis_line" >> "$_xdis_out"
+                    ;;
+            esac
+        fi
+    done < "$_xdis_conf"
+    [ "$_xdis_open" -eq 0 ] || { say "${RED}Кавычка NFQWS_ARGS_CUSTOM не закрыта; конфиг не изменён.${RESET}"; return 1; }
+    if [ "$_xdis_found" -eq 0 ]; then
+        printf '\nNFQWS_ARGS_CUSTOM="\n' >> "$_xdis_out"
+        cat "$_xdis_strategy" >> "$_xdis_out"
+        printf '"\n' >> "$_xdis_out"
+    fi
+    sh -n "$_xdis_out"
+}
+
+xmenu_dot_doh_ensure_port() {
+    _xdep_file=$1 _xdep_var=$2 _xdep_port=$3
+    _xdep_line=$(grep -m 1 -E "^[[:space:]]*${_xdep_var}=" "$_xdep_file" 2>/dev/null || :)
+    if [ -z "$_xdep_line" ]; then printf '%s=%s\n' "$_xdep_var" "$_xdep_port" >> "$_xdep_file"; return $?; fi
+    _xdep_value=${_xdep_line#*=}
+    _xdep_value=$(printf '%s' "$_xdep_value" | tr -d '\"\047[:space:]')
+    case ",$_xdep_value," in *,"$_xdep_port",*) return 0 ;; esac
+    _xdep_tmp="$_xdep_file.port.$$"
+    awk -v var="$_xdep_var" -v port="$_xdep_port" '
+        BEGIN { done=0 }
+        $0 ~ "^[[:space:]]*" var "=" && !done {
+            value=$0; sub(/^[^=]*=/, "", value); gsub(/[\"\047[:space:]]/, "", value)
+            if (value=="") value=port; else value=value "," port
+            print var "=" value; done=1; next
+        }
+        { print }
+        END { if (!done) exit 1 }
+    ' "$_xdep_file" > "$_xdep_tmp" && mv -f "$_xdep_tmp" "$_xdep_file" || { rm -f "$_xdep_tmp"; return 1; }
+}
+
+xmenu_dot_doh_apply_version() {
+    _xdav_ver=$1
+    _xdav_conf=$(xmenu_nfqws_config_path "$_xdav_ver") || return 1
+    _xdav_init=$(xmenu_nfqws_init_path "$_xdav_ver") || return 1
+    [ -f "$_xdav_conf" ] || { say "${RED}Конфиг не найден: $_xdav_conf${RESET}"; return 1; }
+    [ ! -L "$_xdav_conf" ] || { say "${RED}Конфиг является симлинком; изменение отменено.${RESET}"; return 1; }
+    if grep -qE '#DNS|dot\.pub,doh\.pub|dns\.iij\.jp|xbox-dns\.ru' "$_xdav_conf" 2>/dev/null; then
+        say "${YELLOW}В конфиге уже найдены признаки DNS-фильтра (nfqws$_xdav_ver). Добавить ещё раз?${RESET}"
+        confirm_no 'Повторно добавить стратегию?' || { say "Пропущено для nfqws$_xdav_ver."; return 0; }
+    fi
+    ensure_network || return 1
+    mkdir -p "$ROOT_DIR" || return 1
+    _xdav_work="$ROOT_DIR/dns-filter-$$"
+    mkdir "$_xdav_work" || return 1
+    _xdav_strategy="$_xdav_work/strategy.conf" _xdav_candidate="$_xdav_work/candidate.conf"
+    if ! xmenu_dot_doh_load_strategy "$_xdav_ver" "$_xdav_strategy" ||
+       ! xmenu_dot_doh_inject_strategy "$_xdav_conf" "$_xdav_strategy" "$_xdav_candidate" ||
+       ! xmenu_dot_doh_ensure_port "$_xdav_candidate" TCP_PORTS 853 ||
+       ! xmenu_dot_doh_ensure_port "$_xdav_candidate" UDP_PORTS 853 || ! sh -n "$_xdav_candidate"; then
+        rm -rf "$_xdav_work"
+        say "${RED}Не удалось подготовить корректное изменение; исходный конфиг сохранён.${RESET}"
+        return 1
+    fi
+    backup_file "$_xdav_conf" || { rm -rf "$_xdav_work"; return 1; }
+    replace_shell_config "$_xdav_candidate" "$_xdav_conf" || { rm -rf "$_xdav_work"; say 'Не удалось атомарно обновить конфиг.'; return 1; }
+    rm -rf "$_xdav_work"
+    say "${GREEN}Добавлена стратегия обхода DoT/DoH для nfqws$_xdav_ver; порты TCP/UDP 853 проверены.${RESET}"
+    if [ -x "$_xdav_init" ]; then
+        "$_xdav_init" restart || { say "${RED}Конфиг обновлён, но перезапуск $_xdav_init завершился ошибкой.${RESET}"; return 1; }
+    else
+        say "${YELLOW}Конфиг обновлён, но init-скрипт не найден: $_xdav_init${RESET}"
+        return 1
+    fi
+}
+
+xmenu_dot_doh_bypass_menu() {
+    _xddm_has1=0 _xddm_has2=0
+    is_installed nfqws-keenetic && _xddm_has1=1
+    is_installed nfqws2-keenetic && _xddm_has2=1
+    if [ "$_xddm_has1" -eq 0 ] && [ "$_xddm_has2" -eq 0 ]; then
+        say 'Обход DoT/DoH доступен при установленном nfqws-keenetic или nfqws2-keenetic.'
+        return 1
+    fi
+    if [ "$_xddm_has1" -eq 1 ] && [ "$_xddm_has2" -eq 1 ]; then
+        say 'Установлены обе версии NFQWS.'
+        menu_item 1 'nfqws-keenetic (v1) — классический dpi-desync'
+        menu_item 2 'nfqws2-keenetic (v2) — lua-desync'
+        menu_item a 'Обе версии'
+        menu_item 0 'Отмена'
+        _read_or_eof 'Выбери версию: ' || return 0
+        case "$_read_value" in
+            1) _xddm_versions=1 ;;
+            2) _xddm_versions=2 ;;
+            a|A|а|А) _xddm_versions='1 2' ;;
+            *) return 0 ;;
+        esac
+    elif [ "$_xddm_has1" -eq 1 ]; then _xddm_versions=1
+    else _xddm_versions=2
+    fi
+    _xddm_label='nfqws'
+    [ "$_xddm_versions" = 2 ] && _xddm_label='nfqws2'
+    [ "$_xddm_versions" = '1 2' ] && _xddm_label='обе версии'
+    confirm_yes "Добавить стратегию обхода блокировок DoT/DoH в NFQWS_ARGS_CUSTOM ($_xddm_label)?" || {
+        say 'Отменено: конфиг не менялся, стратегия не загружалась.'
+        return 0
+    }
+    _xddm_rc=0
+    for _xddm_ver in $_xddm_versions; do xmenu_dot_doh_apply_version "$_xddm_ver" || _xddm_rc=1; done
+    return "$_xddm_rc"
+}
+
+xmenu_parse_fake_blobs() {
+    : > "$2" && : > "$3" || return 1
+    awk -v mapfile="$2" -v entries="$3" '
+        /^[[:space:]]*#/ {next}
+        {
+            if (match($0, /^NFQWS_[A-Z_]*ARGS[A-Z_]*=/)) section=substr($0,1,RLENGTH-1)
+            rest=$0
+            while (match(rest, /--blob=[A-Za-z0-9_.-]+:[^[:space:]"\047]+/)) {
+                token=substr(rest,RSTART+7,RLENGTH-7)
+                separator=index(token,":")
+                alias=substr(token,1,separator-1)
+                path=substr(token,separator+1)
+                sub(/^@/,"",path)
+                sub(/^.*\//,"",path)
+                mapped[alias]=path
+                rest=substr(rest,RSTART+RLENGTH)
+            }
+            rest=$0
+            while (match(rest, /fake:blob=[^:[:space:]"\047]+/)) {
+                alias=substr(rest,RSTART+10,RLENGTH-10)
+                if (alias !~ /^0[xX]/ && !referenced[alias]++) {
+                    ordered[++count]=alias
+                    sections[alias]=(section=="" ? "NFQWS" : section)
+                }
+                rest=substr(rest,RSTART+RLENGTH)
+            }
+        }
+        END {
+            for (alias in mapped) print alias "|" mapped[alias] > mapfile
+            for (i=1;i<=count;i++) {
+                alias=ordered[i]
+                filename=(alias in mapped ? mapped[alias] : "встроенный blob")
+                print i "|" sections[alias] "|" alias "|" filename > entries
+            }
+            exit(count ? 0 : 1)
+        }
+    ' "$1"
+}
+
+xmenu_choose_nfqws() {
+    _xcn_one=$(xmenu_nfqws_config_path 1)
+    _xcn_two=$(xmenu_nfqws_config_path 2)
+    if [ -f "$_xcn_one" ] && [ -f "$_xcn_two" ]; then
+        menu_item 1 'nfqws (v1)'
+        menu_item 2 'nfqws2 (v2)'
+        menu_item 0 'Назад'
+        _read_or_eof 'Выбери версию: ' || return 1
+        case "$_read_value" in 1|2) XMENU_SELECTED_NFQWS_VERSION=$_read_value ;; *) return 1 ;; esac
+    elif [ -f "$_xcn_two" ]; then XMENU_SELECTED_NFQWS_VERSION=2
+    elif [ -f "$_xcn_one" ]; then XMENU_SELECTED_NFQWS_VERSION=1
+    else say 'Конфигурация NFQWS не найдена.'; return 1
+    fi
+}
+
+xmenu_fake_blob_rewrite() {
+    awk -v name="$2" -v path="$3" '
+        {
+            line=$0; result=""; needle="--blob=" name ":"
+            while ((pos=index(line,needle)) > 0) {
+                result=result substr(line,1,pos-1) needle "@" path
+                line=substr(line,pos+length(needle))
+                sub(/^[^[:space:]"\047]*/, "", line)
+                found=1
+            }
+            print result line
+        }
+        END {
+            if (!found) print "NFQWS_BASE_ARGS=\"${NFQWS_BASE_ARGS:-} --blob=" name ":@" path "\""
+        }
+    ' "$1" > "$4"
+}
+
+xmenu_fake_blob_menu() (
+    xmenu_choose_nfqws || return 0
+    ver=$XMENU_SELECTED_NFQWS_VERSION
+    conf=$(xmenu_nfqws_config_path "$ver")
+    init=$(xmenu_nfqws_init_path "$ver")
+    case "$ver" in 1) blobs=${XMENU_NFQWS1_BLOBS:-/opt/etc/nfqws} ;; 2) blobs=${XMENU_NFQWS2_BLOBS:-/opt/etc/nfqws2/blobs} ;; esac
+    work=$(mktemp -d /tmp/xmenu-fakeblob-XXXXXX) || return 1
+    trap 'rm -rf "$work"' 0
+    trap 'exit 130' INT TERM HUP
+    xmenu_parse_fake_blobs "$conf" "$work/map" "$work/list" || {
+        say 'В конфиге нет именованных fake:blob. Hex-значения не изменяются.'; return 0;
+    }
+    while IFS='|' read -r idx section name base; do
+        say "$idx. $section: $name ($base)"
+    done < "$work/list"
+    _read_or_eof 'Номер fake:blob (0 — назад): ' || return 0
+    case "$_read_value" in ''|0) return 0 ;; *[!0-9]*) say 'Нужен номер из списка.'; return 1 ;; esac
+    selected=$(awk -F'|' -v n="$_read_value" '$1==n {print $3; exit}' "$work/list")
+    case "$selected" in ''|*[!A-Za-z0-9_.-]*) say 'Недопустимое имя blob.'; return 1 ;; esac
+    : > "$work/local"
+    for file in "$blobs"/*.bin; do [ ! -f "$file" ] || basename "$file" >> "$work/local"; done
+    : > "$work/repo"
+    if fetch "$NF_REPO/strategies/blobs/SHA256SUMS" "$work/sums" 30; then
+        awk 'length($1)==64 && $1 !~ /[^0-9a-fA-F]/ {n=$2; sub(/^\*/,"",n); sub(/.*\//,"",n); if (n ~ /^[A-Za-z0-9_.-]+\.bin$/) print n}' "$work/sums" > "$work/repo"
+    fi
+    if [ ! -s "$work/repo" ] && fetch 'https://api.github.com/repos/rndnaame/nfqws-menu/contents/strategies/blobs' "$work/api" 30; then
+        grep -oE '"name":[[:space:]]*"[A-Za-z0-9_.-]+\.bin"' "$work/api" | sed 's/.*"\([^"]*\)"$/\1/' > "$work/repo"
+    fi
+    if [ ! -s "$work/repo" ]; then
+        printf '%s\n' ACTIVE_DISCORD_UDP.bin ACTIVE_GAME_UDP.bin quic_initial_www_google_com.bin stun.bin stun2.bin tls_clienthello_www_google_com.bin > "$work/repo"
+    fi
+    cat "$work/local" "$work/repo" | awk '!seen[$0]++' > "$work/candidates"
+    idx=0
+    while IFS= read -r file; do
+        idx=$((idx+1)); label='из репозитория'
+        [ ! -f "$blobs/$file" ] || label='локально'
+        say "$idx. $file ($label)"
+    done < "$work/candidates"
+    _read_or_eof 'Номер нового файла (0 — назад): ' || return 0
+    case "$_read_value" in ''|0) return 0 ;; *[!0-9]*) return 1 ;; esac
+    file=$(awk -v n="$_read_value" 'NR==n {print; exit}' "$work/candidates")
+    case "$file" in ''|*[!A-Za-z0-9_.-]*) say 'Неверный файл.'; return 1 ;; esac
+    target="$blobs/$file"
+    if [ ! -f "$target" ]; then
+        fetch "$NF_REPO/strategies/blobs/$file" "$work/download" 60 && [ -s "$work/download" ] &&
+            ! response_looks_like_error_page "$work/download" || return 1
+        expected=$(awk -v n="$file" '{f=$2; sub(/^\*/,"",f); sub(/.*\//,"",f); if(f==n && length($1)==64) {print $1; exit}}' "$work/sums" 2>/dev/null)
+        if [ -n "$expected" ] && ! sha_ok "$work/download" "$expected"; then say 'Контрольная сумма blob не совпала.'; return 1; fi
+        mkdir -p "$blobs" || return 1
+        cp "$work/download" "$target.xmenu.$$" && mv "$target.xmenu.$$" "$target" || return 1
+    fi
+    acquire_lock || return 1
+    trap 'release_operation_lock; rm -rf "$work"' 0
+    xmenu_fake_blob_rewrite "$conf" "$selected" "$target" "$work/candidate" &&
+        sh -n "$work/candidate" && backup_file "$conf" && replace_shell_config "$work/candidate" "$conf" || return 1
+    release_operation_lock
+    say "Настроено: --blob=$selected:@$target"
+    if confirm_yes "Перезапустить nfqws$ver?"; then
+        [ -x "$init" ] && "$init" restart || { say "Не удалось перезапустить $init."; return 1; }
+    fi
+)
+
+xmenu_hosts_parse() {
+    awk -v choices="$2" '
+        function valid_ip(ip, a,n,i) {
+            n=split(ip,a,"."); if(n!=4) return 0
+            for(i=1;i<=n;i++) if(a[i]!~/^[0-9]+$/ || a[i]+0>255) return 0
+            return 1
+        }
+        function valid_domain(d, a,n,i) {
+            if(length(d)>253 || d !~ /\./ || d ~ /\.\./) return 0
+            n=split(d,a,".")
+            for(i=1;i<=n;i++) if(length(a[i])<1 || length(a[i])>63 || a[i] !~ /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) return 0
+            return 1
+        }
+        BEGIN { n=split(choices,c,/[,; ]+/); for(i=1;i<=n;i++) selected[c[i]]=1 }
+        /^[[:space:]]*#/ {section++; next}
+        NF>=2 && (choices=="all" || selected[section]) && valid_ip($1) && valid_domain($2) {values[tolower($2)]=$1}
+        END {for(d in values) print values[d] "\t" d}
+    ' "$1"
+}
+
+xmenu_hosts_menu() (
+    command -v ndmc >/dev/null 2>&1 || { say 'Нужен ndmc Keenetic/Netcraze.'; return 1; }
+    work=$(mktemp -d /tmp/xmenu-hosts-XXXXXX) || return 1
+    trap 'rm -rf "$work"' 0
+    trap 'exit 130' INT TERM HUP
+    fetch "$NF_REPO/hosts" "$work/hosts" 45 && [ -s "$work/hosts" ] &&
+        ! response_looks_like_error_page "$work/hosts" || { say 'Не удалось загрузить hosts.'; return 1; }
+    awk '/^[[:space:]]*#/ {name=$0; sub(/^[[:space:]]*#+[[:space:]]*/,"",name); sub(/[[:space:]]+$/,"",name); print ++i ". " name}' "$work/hosts"
+    say 'a. Все секции'
+    say '88. Удалить домены из этого hosts-файла'
+    say '99. Показать текущие записи'
+    say '0. Назад'
+    _read_or_eof 'Выбери секции через запятую: ' || return 0
+    choice=$_read_value
+    case "$choice" in
+        ''|0) return 0 ;;
+        99) xmenu_dns_ndmc 'show running-config' | awk '$1=="ip" && $2=="host" {print $3 " → " $4}'; return 0 ;;
+        88) action=remove; choice=all ;;
+        a|A|all|ALL|все|Все) action=add; choice=all ;;
+        *[!0-9,\;\ ]*) say 'Неверный выбор.'; return 1 ;;
+        *) action=add ;;
+    esac
+    xmenu_hosts_parse "$work/hosts" "$choice" > "$work/pairs"
+    count=$(wc -l < "$work/pairs" | tr -d ' ')
+    [ "$count" -gt 0 ] || { say 'В выбранных секциях нет корректных записей IPv4.'; return 0; }
+    if [ "$action" = remove ]; then
+        confirm_no "Удалить домены из hosts-файла ($count)?" || return 0
+    else
+        say "Будет добавлено уникальных доменов: $count"
+        [ "$count" -le 64 ] || say 'Превышен лимит 64 записей Keenetic; часть доменов может не добавиться.'
+        confirm_yes 'Применить выбранные записи hosts?' || return 0
+    fi
+    acquire_lock || return 1
+    trap 'release_operation_lock; rm -rf "$work"' 0
+    mkdir -p "$BACKUP_DIR" || return 1
+    if ! xmenu_dns_ndmc 'show running-config' > "$work/running"; then say 'Не удалось сохранить текущие записи.'; return 1; fi
+    awk '$1=="ip" && $2=="host"' "$work/running" > "$work/previous"
+    (umask 077; cp "$work/previous" "$BACKUP_DIR/hosts-ip-host.$(date +%Y%m%d-%H%M%S).$$.bak") || return 1
+    changed=0; failed=0
+    while IFS="$(printf '\t')" read -r ip domain; do
+        if [ "$action" = remove ]; then cmd="no ip host $domain"; else cmd="ip host $domain $ip"; fi
+        if xmenu_dns_ndmc "$cmd" >/dev/null 2>&1; then changed=$((changed+1)); else failed=$((failed+1)); say "Ошибка: $domain"; fi
+    done < "$work/pairs"
+    if [ "$changed" -gt 0 ]; then xmenu_dns_save || return 1; fi
+    say "Обработано записей: $changed; ошибок: $failed."
+    [ "$failed" -eq 0 ]
+)
+
+remove_tg_ws_proxy_rust() {
+    if [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ]; then /opt/etc/init.d/S99tg-ws-proxy-rs stop || return 1; fi
+    rm -f /opt/etc/init.d/S99tg-ws-proxy-rs /opt/bin/tg-ws-proxy-rs || return 1
+    say 'TG WS Proxy Rust удалён; настройки и секрет сохранены в /opt/etc/tg-ws-proxy-rs.'
+}
+
+
+xmenu_nf_manage_menu() {
+    _xnfm_lang=$(get_ui_lang)
+    while :; do
+        if [ "$_xnfm_lang" = en ]; then
+            say "${BRIGHT_CYAN}[::]  nfqws2 management:${RESET}"
+            menu_item 1 'Select and apply nfqws strategy'
+            menu_item 2 'Install all nfqws2 blobs'
+            menu_item 3 'Download/check blobs and lists for active strategy'
+            menu_item 4 'Download rkn.list (nfqws / nfqws2)'
+            menu_item 5 'DoT/DoH blocking bypass'
+            menu_item 6 'Current DNS server settings'
+            menu_item 7 'Update Ipset Lists'
+            menu_item 8 'Change current fake:blob'
+            menu_item 9 'Discord: enable/disable fix'
+            menu_item 10 'Update Keenetic hosts'
+            menu_item 0 'Back'
+            _xnfm_prompt='[?] Select an option: '
+        else
+            say "${BRIGHT_CYAN}[::]  Управление nfqws2:${RESET}"
+            menu_item 1 'Выбрать и применить стратегию nfqws'
+            menu_item 2 'Установить все blobs nfqws2'
+            menu_item 3 'Скачать/проверить blobs и lists активной стратегии'
+            menu_item 4 'Скачать rkn.list (nfqws / nfqws2)'
+            menu_item 5 'Обход блокировки DoT/DoH'
+            menu_item 6 'Настройки текущих DNS-серверов'
+            menu_item 7 'Обновить Ipset Lists'
+            menu_item 8 'Смена текущих fake:blob'
+            menu_item 9 'Discord: включить/выключить фикс'
+            menu_item 10 'Обновление hosts'
+            menu_item 0 'Назад'
+            _xnfm_prompt='[?] Выбери пункт: '
+        fi
+        _read_or_eof "$_xnfm_prompt" || return 0
+        case "$_read_value" in
+            1) ensure_network && strategy_menu ;;
+            2) ensure_network && install_all_nfqw2_blobs ;;
+            3) sync_active_blobs ;;
+            4) install_rkn_list ;;
+            5) xmenu_dot_doh_bypass_menu ;;
+            6) xmenu_dns_manage_menu ;;
+            7) xmenu_update_ipset_list ;;
+            8) xmenu_fake_blob_menu ;;
+            9) xmenu_discord_menu ;;
+            10) xmenu_hosts_menu ;;
+            0|'') return 0 ;;
+            *) say "${RED}Неверный пункт.${RESET}" ;;
+        esac
+    done
+}
+
+xmenu_other_utilities_menu() {
+    _xoum_lang=$(get_ui_lang)
+    while :; do
+        if [ "$_xoum_lang" = en ]; then
+            say "${BRIGHT_CYAN}[::]  Other utilities:${RESET}"
+            menu_item 1 'usque-keenetic'
+            menu_item 2 'MagiTrickle'
+            menu_item 3 'firc'
+            menu_item 4 'warpscout'
+            menu_item 5 'Zapret-Manager (OpenWrt only)'
+            menu_item 0 'Back'
+            _xoum_prompt='[?] Select an option: '
+        else
+            say "${BRIGHT_CYAN}[::]  Прочие утилиты:${RESET}"
+            menu_item 1 'usque-keenetic'
+            menu_item 2 'MagiTrickle'
+            menu_item 3 'firc'
+            menu_item 4 'warpscout'
+            menu_item 5 'Zapret-Manager — только для OpenWrt'
+            menu_item 0 'Назад'
+            _xoum_prompt='[?] Выбери пункт: '
+        fi
+        _read_or_eof "$_xoum_prompt" || return 0
+        case "$_read_value" in
+            1) install_usque_keenetic; invalidate_component_status_cache ;;
+            2)
+                if ! is_installed magitrickle; then
+                    if [ "$_xoum_lang" = en ]; then
+                        say 'Security note: the upstream MagiTrickle bootstrap currently uses HTTP to add its package feed.'
+                        confirm_yes 'Continue with the upstream installer? The feed bootstrap is not encrypted.' || continue
+                    else
+                        say 'Безопасность: установщик MagiTrickle добавляет пакетный репозиторий по HTTP.'
+                        confirm_yes 'Продолжить запуск установщика? Подключение репозитория не шифруется.' || continue
+                    fi
+                fi
+                install_magitrickle
+                invalidate_component_status_cache
+                ;;
+            3) install_firc; invalidate_component_status_cache ;;
+            4) install_warpscout ;;
+            5)
+                say 'Zapret-Manager рассчитан на OpenWrt (firewall4/nftables) и не устанавливается на штатную KeeneticOS.'
+                say 'Официальная инструкция: https://github.com/StressOzz/Zapret-Manager'
+                ;;
+            0|'') return 0 ;;
+            *) say "${RED}Неверный пункт.${RESET}" ;;
+        esac
+    done
+}
+
+# The main menu is the single entry point; service tools are opened with S.
 
 render_menu() {
     _XMENU_RENDER_WIDTH=$(terminal_width)
@@ -4482,7 +5814,7 @@ render_menu() {
     fi
     [ -t 1 ] && printf '\033[2J\033[H'
     # Печатаем готовые строки подряд без пауз: меню быстро появляется
-    # последовательно, как в nfqws-menu, и не ждёт таймеров между пунктами.
+    # без ожидания таймеров между пунктами.
     while IFS= read -r _XMENU_FRAME_LINE || [ -n "$_XMENU_FRAME_LINE" ]; do
         printf '%s\n' "$_XMENU_FRAME_LINE"
     done < "$_XMENU_FRAME_FILE"
@@ -4509,28 +5841,20 @@ render_menu_content() {
     printf '%12s%s%s%s\n' '' "$WHITE" "$_title" "$RESET"
     line
 
-    # Architecture uses nfqws-menu order: opkg print-architecture -> opkg.conf -> uname -m.
+    # Prefer Entware architecture over the kernel architecture.
     _cpu=$_arch
     if [ -z "$_cpu" ]; then
         if [ "$_lang" = en ]; then _cpu='not detected'; else _cpu='не определена'; fi
     fi
-    if [ -z "$_arch" ]; then
-        if [ "$_lang" = en ]; then _arch='not detected'; else _arch='не определена'; fi
-    fi
 
     if [ "$_lang" = en ]; then
-        printf '%sModel: %s %s %s%s\n' "$CYAN" "$_model" "${_fw:-not detected}" "$_cpu" "$RESET"
+            printf '%sModel: %s %s (%s)%s\n' "$CYAN" "$_model" "${_fw:-not detected}" "$_cpu" "$RESET"
     else
-        printf '%sМодель: %s %s %s%s\n' "$CYAN" "$_model" "${_fw:-не определена}" "$_cpu" "$RESET"
+            printf '%sМодель: %s %s (%s)%s\n' "$CYAN" "$_model" "${_fw:-не определена}" "$_cpu" "$RESET"
     fi
     render_component_statuses
     line
 
-    if [ "$_lang" = en ]; then
-        menu_item U 'Check for Xmenu updates now'
-    else
-        menu_item U 'Проверить наличие обновления Xmenu'
-    fi
     _XMENU_NOTICE_LINE=$(( $(wc -l < "$_XMENU_FRAME_FILE") + 1 ))
     xmenu_show_pending_update_notice
     [ "${XMENU_UPDATE_NOTICE_VISIBLE:-0}" = 1 ] || say ''
@@ -4550,26 +5874,23 @@ render_menu_content() {
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         say ""
-        say "${PURPLE}[::]  Strategies / blobs / lists:${RESET}"
-        menu_item 11 'Select and apply nfqws strategy'
-        menu_item 12 'Download/check blobs and lists for active strategy from the list'
-        menu_item 13 'Install all nfqws2 blobs'
-        menu_item 14 'Download rkn.list (nfqws2 / nfqws) — 125k+ domains'
+        say "${PURPLE}[::]  nfqws2 management:${RESET}"
+        menu_item 11 'nfqws2 management'
         say ""
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
-        menu_item 15 'DPI Detector (DNS/16 KB)'
-        menu_item 16 'TG WS Proxy Rust'
-        menu_item 17 'KeenKit'
-        menu_item 18 'awg-manager'
+        menu_item 12 'DPI Detector (DNS/16 KB)'
+        menu_item 13 'TG WS Proxy Rust'
+        menu_item 14 'KeenKit'
+        menu_item 15 'awg-manager'
+        menu_item 16 'Other utilities'
         say ""
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
-        menu_item 19 'Сменить язык: RU / EN (change language)'
-        menu_item 20 'Remove components'
-        menu_item 21 'Remove Xmenu'
-        menu_item 22 'Update Xmenu'
-        menu_item 23 'OPKG settings / Entware mirrors'
+        menu_item 17 'Сменить язык: RU / EN (change language)'
+        menu_item 18 'Remove components'
+        menu_item 19 'Remove Xmenu'
+        menu_item 20 'Update Xmenu'
+        menu_item 21 'OPKG settings / Entware mirrors'
         menu_item 0  'Exit'
-        _prompt='[?] Select an option [Enter = exit]: '
     else
         say "${PURPLE}[::]  Установка / обновление:${RESET}"
         menu_item 1  'XKeen — Stable'
@@ -4585,26 +5906,23 @@ render_menu_content() {
         menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         say ""
-        say "${PURPLE}[::]  Стратегии / blobs / lists:${RESET}"
-        menu_item 11 'Выбрать и применить стратегию nfqws'
-        menu_item 12 'Скачать/проверить blobs и lists активной стратегии из списка'
-        menu_item 13 'Установить все blobs nfqws2'
-        menu_item 14 'Скачать rkn.list (nfqws2 / nfqws) — 125k+ доменов'
+        say "${PURPLE}[::]  Управление nfqws2:${RESET}"
+        menu_item 11 'Управление nfqws2'
         say ""
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
-        menu_item 15 'DPI Detector (DNS/16kb)'
-        menu_item 16 'TG WS Proxy Rust'
-        menu_item 17 'KeenKit'
-        menu_item 18 'awg-manager'
+        menu_item 12 'DPI Detector (DNS/16kb)'
+        menu_item 13 'TG WS Proxy Rust'
+        menu_item 14 'KeenKit'
+        menu_item 15 'awg-manager'
+        menu_item 16 'Прочие утилиты'
         say ""
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
-        menu_item 19 'Сменить язык: RU / EN (change language)'
-        menu_item 20 'Удаление компонентов'
-        menu_item 21 'Удалить Xmenu'
-        menu_item 22 'Обновить Xmenu'
-        menu_item 23 'Настройки OPKG / зеркала Entware'
+        menu_item 17 'Сменить язык: RU / EN (change language)'
+        menu_item 18 'Удаление компонентов'
+        menu_item 19 'Удалить Xmenu'
+        menu_item 20 'Обновить Xmenu'
+        menu_item 21 'Настройки OPKG / зеркала Entware'
         menu_item 0  'Выход'
-        _prompt='[?] Выберите пункт [Enter = выход]: '
     fi
     line
 }
@@ -4943,7 +6261,7 @@ remove_optional_components_menu() {
             awg) if confirm 'Удалить пакет awg-manager (настройки в /opt/etc/awg-manager сохранятся)?'; then opkg remove awg-manager || say "${RED}Не удалось удалить awg-manager.${RESET}"; fi ;;
             tgws)
                 if confirm 'Удалить TG WS Proxy Rust, сохранив настройки?'; then
-                    if [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ] || [ -x /opt/bin/tg-ws-proxy-rs ]; then run_nfmenu_action remove_tg_ws_proxy_rs
+                    if [ -x /opt/etc/init.d/S99tg-ws-proxy-rs ] || [ -x /opt/bin/tg-ws-proxy-rs ]; then remove_tg_ws_proxy_rust
                     else say "${YELLOW}Автоудаление старой реализации TG WS Proxy отключено; проверь пакет и инструкцию его версии.${RESET}"; fi
                 fi ;;
             keenkit) if confirm 'Удалить KeenKit (/opt/keenkit.sh)?'; then rm -f /opt/keenkit.sh; [ ! -L /opt/bin/keenkit ] || rm -f /opt/bin/keenkit; say 'KeenKit удалён.'; fi ;;
@@ -5088,6 +6406,11 @@ remove_menu() {
 main() {
     configure_locale
     require_root || return 1
+    case "${1:-menu}" in
+        discord-fix-rules) xmenu_discord_rules_apply; return $? ;;
+        discord-fix-unrules) xmenu_discord_rules_remove; return $? ;;
+        discord-fix-status) xmenu_discord_status; return $? ;;
+    esac
     migrate_legacy_xmenu_data || { say "Не удалось перенести данные Xmenu в $ROOT_DIR. Старые файлы сохранены."; return 1; }
     # Фоновое чтение статусов не должно переустанавливать /opt/bin/xmenu.
     case "${1:-menu}" in __refresh-component-cache) : ;; *) install_xmenu_command || : ;; esac
@@ -5167,10 +6490,10 @@ main() {
         INTERRUPTED=0
         MENU_READING=1
         _menu_lang=$(get_ui_lang)
-        if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [U = check updates, Enter = exit]: '; else _prompt='[?] Выберите пункт [U = проверить обновление, Enter = выход]: '; fi
+        if [ "$_menu_lang" = en ]; then _prompt='[?] Select an option [S = service, U = check updates, Enter = exit]: '; else _prompt='[?] Выберите пункт [S = сервис, U = проверить обновление, Enter = выход]: '; fi
         if [ "$(terminal_width)" -lt 70 ]; then
-            if [ "$_menu_lang" = en ]; then _prompt='[?] Option [U, Enter=exit]: '
-            else _prompt='[?] Пункт [U, Enter=выход]: '; fi
+            if [ "$_menu_lang" = en ]; then _prompt='[?] Option [S, U, Enter=exit]: '
+            else _prompt='[?] Пункт [S, U, Enter=выход]: '; fi
         fi
         xmenu_read_menu_prompt "${LAVENDER}$_prompt${RESET}"
         _read_rc=$?
@@ -5191,9 +6514,13 @@ main() {
             return 0
         fi
         case "$_choice" in
-            1|2|3|4|5|6|7|8|9|10|15|16|17|18|20) invalidate_component_status_cache ;;
+            1|2|3|4|5|6|7|8|9|10|12|13|14|15|16|18|20) invalidate_component_status_cache ;;
         esac
         case "$_choice" in
+            s|S)
+                xmenu_service_menu
+                continue
+                ;;
             u|U)
                 check_xmenu_update_now
                 pause
@@ -5214,19 +6541,17 @@ main() {
             8) install_xkeen_core_profile xray; invalidate_core_version_cache; pause ;;
             9) install_manual_bundle_profile mihomo; invalidate_core_version_cache; pause ;;
             10) install_manual_bundle_profile xray; invalidate_core_version_cache; pause ;;
-            11) ensure_network && strategy_menu; pause ;;
-            12) sync_active_blobs; pause ;;
-            13) install_all_nfqw2_blobs; pause ;;
-            14) install_rkn_list; pause ;;
-            15) launch_dpi; pause ;;
-            16) run_nfmenu_action menu_tg_ws_proxy_rs; pause ;;
-            17) run_nfmenu_action menu_keenkit; pause ;;
-            18) run_nfmenu_action menu_awg_manager; pause ;;
-            19) change_ui_language; pause ;;
-            20) remove_components_menu; invalidate_core_version_cache ;;
-            21) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
-            22) update_xmenu_script || pause ;;
-            23) opkg_settings_menu ;;
+            11) xmenu_nf_manage_menu ;;
+            12) launch_dpi; pause ;;
+            13) install_tg_ws_proxy_rust; pause ;;
+            14) install_keenkit; pause ;;
+            15) install_awg_manager; pause ;;
+            16) xmenu_other_utilities_menu ;;
+            17) change_ui_language; pause ;;
+            18) remove_components_menu; invalidate_core_version_cache ;;
+            19) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
+            20) update_xmenu_script || pause ;;
+            21) opkg_settings_menu ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
