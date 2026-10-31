@@ -876,7 +876,7 @@ Xmenu/
 
 | Проект | Роль в Xmenu |
 | --- | --- |
-| [nfqws2-menu / nfqws-menu](https://github.com/rndnaame/nfqws-menu) | Источник адаптированных сервисных решений, базового каталога стратегий, blobs/lists и отдельных установщиков утилит. |
+| [nfqws2-menu / nfqws-menu](https://github.com/rndnaame/nfqws-menu) | Основной проект интерактивного меню |
 | [XKeen](https://github.com/jameszeroX/XKeen) | Установка и управление прокси-ядрами, профили Auto, геофайлы и автозагрузка. |
 | [XKeen UI — zxc-rv](https://github.com/zxc-rv/XKeen-UI) | Веб-панель управления XKeen. |
 | [XKeen UI — umarcheh001](https://github.com/umarcheh001/Xkeen-UI) | Альтернативная веб-панель XKeen. |
