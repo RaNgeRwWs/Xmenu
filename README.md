@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="my-icon.png" alt="Xmenu" width="112">
-
 # ◆ Xmenu
 
 ### Управление роутером из одного SSH-меню
