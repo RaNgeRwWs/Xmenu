@@ -868,58 +868,6 @@ Xmenu/
 
 Рабочие сборки, логи и промежуточные материалы не включаются в Git. Для текстовых конфигураций и shell-файлов используется LF.
 
-</details>
-
-<details>
-<summary><b>Добавить или изменить дополнительную стратегию</b></summary>
-
-1. Размести полный конфиг в `strategies/nfqws2/` с понятным именем, без порядкового префикса.
-2. Используй переменные и аргументы, поддерживаемые целевой версией NFQWS2. Не включай личные адреса, ключи и секреты.
-3. Укажи корректные пути ресурсов, затем проверь shell-синтаксис.
-4. После любых изменений пересчитай манифест из корня репозитория:
-
-```sh
-for config in strategies/nfqws2/*.conf; do
-    sh -n "$config" || exit 1
-done
-sha256sum strategies/nfqws2/*.conf > strategies/nfqws2/SHA256SUMS
-sha256sum -c strategies/nfqws2/SHA256SUMS
-```
-
-5. Проверь конфигурацию на совместимом роутере. `sh -n` проверяет оболочку, но не все параметры установленного бинарника NFQWS2.
-
-После изменения самого `xmenu-v1.0.sh` также обнови корневой манифест:
-
-```sh
-sha256sum xmenu-v1.0.sh > SHA256SUMS
-```
-
-</details>
-
-
-## Проверки проекта
-
-GitHub Actions проверяет shell-синтаксис и ShellCheck, запускает сценарии конфигураций, DNS, сервисов, hosts и blobs в BusyBox `ash`, а также проверяет интерактивный ввод и фоновые уведомления в настоящем PTY.
-
-<details>
-<summary><b>Повторить проверки на Linux</b></summary>
-
-```sh
-sh -n xmenu-v1.0.sh
-shellcheck -s sh -S warning xmenu-v1.0.sh
-busybox ash tests/regression.sh
-busybox ash tests/audit_regression.sh
-busybox ash tests/service_regression.sh
-busybox ash tests/nfqws_features.sh
-busybox ash tests/native_actions.sh
-python3 tests/menu_input.py
-python3 tests/startup_render.py
-```
-
-Сценарии используют временные конфиги и подменённые внешние команды. Они проверяют логику Xmenu; доступность серверов и работу конкретной стратегии нужно проверять в своей сети.
-
-</details>
-
 ## Лицензия
 
 Xmenu распространяется по лицензии [MIT](LICENSE). Устанавливаемые компоненты и загружаемые сторонние ресурсы распространяются на условиях их авторов.
