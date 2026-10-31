@@ -2798,7 +2798,7 @@ render_component_status_table() {
                 printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$YELLOW" "$_row_version" "$GREEN" "$RESET"
                 ;;
             *)
-                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$PURPLE" "$_row_version" "$GREEN" "$RESET"
+                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$CYAN" "$_row_version" "$GREEN" "$RESET"
                 ;;
         esac
     done < "$_rcst_file"
