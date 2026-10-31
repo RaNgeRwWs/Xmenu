@@ -1540,6 +1540,7 @@ sync_strategies() {
     _cached_manifest="$ROOT_DIR/manifests/SHA256SUMS"
     _cached_upstream_manifest="$ROOT_DIR/manifests/SHA256SUMS.nfqws-menu"
     _cached_xmenu_manifest="$ROOT_DIR/manifests/SHA256SUMS.xmenu"
+    _cached_xmenu_revision="$ROOT_DIR/manifests/XMENU_REVISION"
     _sync_stamp="$ROOT_DIR/strategies-sync.cache"
     _sync_valid_manifest() {
         [ -s "$1" ] && awk '
@@ -1587,9 +1588,28 @@ sync_strategies() {
             mv -f "$_tmp/SHA256SUMS.nfqws-menu" "$_cached_upstream_manifest" || { rm -rf "$_tmp"; return 1; }
         fi
         _xmenu_strategy_repo=${XMENU_STRATEGY_REPO:-https://raw.githubusercontent.com/rangerxxyy/Xmenu/main}
+        _xmenu_revision=''
+        if [ -z "${XMENU_STRATEGY_REPO:-}" ]; then
+            _xmenu_revision=$(sed -n '1p' "$_cached_xmenu_revision" | tr -d '\r' 2>/dev/null)
+            printf '%s\n' "$_xmenu_revision" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{40}$' || _xmenu_revision=''
+            if [ -n "$_xmenu_revision" ]; then
+                _xmenu_strategy_repo="https://raw.githubusercontent.com/rangerxxyy/Xmenu/$_xmenu_revision"
+            fi
+            if fetch https://api.github.com/repos/rangerxxyy/Xmenu/commits/main "$_tmp/XMENU-REVISION.json" 30; then
+                _xmenu_latest_revision=$(sed -n 's/^[[:space:]]*"sha":[[:space:]]*"\([0-9a-fA-F]\{40\}\)".*/\1/p' "$_tmp/XMENU-REVISION.json" | sed -n '1p')
+                if printf '%s\n' "$_xmenu_latest_revision" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{40}$'; then
+                    _xmenu_revision=$_xmenu_latest_revision
+                    _xmenu_strategy_repo="https://raw.githubusercontent.com/rangerxxyy/Xmenu/$_xmenu_revision"
+                fi
+            fi
+        fi
         if fetch "$_xmenu_strategy_repo/strategies/nfqws2/SHA256SUMS" "$_tmp/SHA256SUMS.xmenu" 30 &&
            _sync_valid_xmenu_manifest "$_tmp/SHA256SUMS.xmenu"; then
             mv -f "$_tmp/SHA256SUMS.xmenu" "$_cached_xmenu_manifest" || { rm -rf "$_tmp"; return 1; }
+            if [ -n "$_xmenu_revision" ]; then
+                printf '%s\n' "$_xmenu_revision" > "$_cached_xmenu_revision.tmp.$$" &&
+                    mv -f "$_cached_xmenu_revision.tmp.$$" "$_cached_xmenu_revision" || { rm -rf "$_tmp"; return 1; }
+            fi
         fi
     fi
     if ! _sync_valid_manifest "$_cached_upstream_manifest" && ! _sync_valid_xmenu_manifest "$_cached_xmenu_manifest"; then
@@ -1622,7 +1642,13 @@ strategy_source_repo() {
     if [ -s "$_ssr_manifest" ]; then
         while IFS= read -r _ssr_entry || [ -n "$_ssr_entry" ]; do
             [ "$(manifest_relpath "$_ssr_entry")" = "$_ssr_rel" ] || continue
-            printf '%s\n' "${XMENU_STRATEGY_REPO:-https://raw.githubusercontent.com/rangerxxyy/Xmenu/main}"
+            _ssr_repo=${XMENU_STRATEGY_REPO:-}
+            if [ -z "$_ssr_repo" ]; then
+                _ssr_revision=$(sed -n '1p' "$ROOT_DIR/manifests/XMENU_REVISION" | tr -d '\r' 2>/dev/null)
+                printf '%s\n' "$_ssr_revision" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{40}$' || _ssr_revision=''
+                _ssr_repo="https://raw.githubusercontent.com/rangerxxyy/Xmenu/${_ssr_revision:-main}"
+            fi
+            printf '%s\n' "$_ssr_repo"
             return 0
         done < "$_ssr_manifest"
     fi
