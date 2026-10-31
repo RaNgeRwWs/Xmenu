@@ -886,7 +886,6 @@ Xmenu/
 | [nfqws2-ui](https://github.com/zemidala/nfqws2-ui) | Дополнительная панель управления NFQWS2. |
 | [Xray-core](https://github.com/XTLS/Xray-core) | Прокси-ядро для профилей XKeen. |
 | [Mihomo](https://github.com/MetaCubeX/mihomo) | Альтернативное прокси-ядро для профилей XKeen. |
-| [Entware](https://github.com/Entware/Entware) | Среда пакетов и утилит в `/opt`, пакетный менеджер OPKG. |
 | [DPI Detector](https://github.com/Runnin4ik/dpi-detector/tree/rust) | Диагностика ограничений соединения и DNS. |
 | [KeenKit](https://github.com/spatiumstas/KeenKit) | Дополнительные инструменты управления Keenetic. |
 | [awg-compressed / awg-manager](https://github.com/rndnaame/awg-compressed) | Установщик и управление AmneziaWG. |
