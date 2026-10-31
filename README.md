@@ -846,7 +846,7 @@ mv /opt/etc/nfqws2/.nfqws2-restore.conf /opt/etc/nfqws2/nfqws2.conf &&
 
 </details>
 
-## Для разработчиков
+## Пути и корневая структура Xmenu
 
 <details>
 <summary><b>Структура репозитория</b></summary>
