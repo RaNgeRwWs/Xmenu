@@ -521,7 +521,7 @@ Xmenu читает текущие данные из `show dns-proxy` и назн
 </details>
 
 <details>
-<summary><b>Все пресеты DoH: номера и HTTPS URI</b></summary>
+<summary><b>Все пресеты DoH: номера и HTTPS URL</b></summary>
 
 Номера соответствуют меню добавления DoH в версии 1.4.3. Ручной ввод — **99**.
 
