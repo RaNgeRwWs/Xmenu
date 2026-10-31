@@ -1535,9 +1535,11 @@ manifest_relpath() {
     printf '%s\n' "$1" | cut -c65- | sed 's/^[[:space:]]*//; s/^\*//'
 }
 sync_strategies() {
-    # Список берём из манифеста, сами конфиги загружаются после выбора.
+    # Combine the upstream catalog with Xmenu-hosted NFQWS2 configs.
     mkdir -p "$CACHE_DIR/nfqws1" "$CACHE_DIR/nfqws2" "$CACHE_DIR/blobs" "$ROOT_DIR/manifests" || return 1
     _cached_manifest="$ROOT_DIR/manifests/SHA256SUMS"
+    _cached_upstream_manifest="$ROOT_DIR/manifests/SHA256SUMS.nfqws-menu"
+    _cached_xmenu_manifest="$ROOT_DIR/manifests/SHA256SUMS.xmenu"
     _sync_stamp="$ROOT_DIR/strategies-sync.cache"
     _sync_valid_manifest() {
         [ -s "$1" ] && awk '
@@ -1548,6 +1550,16 @@ sync_strategies() {
             END {exit(ok ? 0 : 1)}
         ' "$1"
     }
+    _sync_valid_xmenu_manifest() {
+        [ -s "$1" ] && awk '
+            {
+                h=substr($0,1,64); p=substr($0,65); sub(/^[[:space:]]+/, "", p); sub(/^\*/, "", p)
+                if (h !~ /^[0-9a-fA-F]+$/ || length(h)!=64 || p !~ /^strategies\/nfqws2\/[A-Za-z0-9_.+ -]+\.conf$/ || p ~ /\.\./) bad++
+                else ok++
+            }
+            END {exit(ok>0 && bad==0 ? 0 : 1)}
+        ' "$1"
+    }
     _sync_checked=$(sed -n 's/^checked=\([0-9][0-9]*\)$/\1/p' "$_sync_stamp" 2>/dev/null | sed -n '1p')
     _sync_now=$(date +%s 2>/dev/null)
     case "$_sync_checked:$_sync_now" in *[!0-9:]*|:*) _sync_checked= ;; esac
@@ -1556,25 +1568,64 @@ sync_strategies() {
         return 0
     fi
 
+    # Migrate the old combined cache before refreshing into per-source caches.
+    if ! _sync_valid_manifest "$_cached_upstream_manifest" &&
+       ! _sync_valid_xmenu_manifest "$_cached_xmenu_manifest" &&
+       _sync_valid_manifest "$_cached_manifest"; then
+        cp "$_cached_manifest" "$_cached_upstream_manifest" || return 1
+    fi
+
     _sync_can_fetch=1
     ensure_base || _sync_can_fetch=0
     _tmp="$ROOT_DIR/sync.$$"
     rm -rf "$_tmp"
     mkdir -p "$_tmp" || return 1
-    if [ "$_sync_can_fetch" = 1 ] && fetch "$NF_REPO/SHA256SUMS" "$_tmp/SHA256SUMS" 30 &&
-       _sync_valid_manifest "$_tmp/SHA256SUMS"; then
-        mv "$_tmp/SHA256SUMS" "$_cached_manifest" || { rm -rf "$_tmp"; return 1; }
-        printf 'checked=%s\n' "$_sync_now" > "$_sync_stamp.tmp.$$" &&
-            mv -f "$_sync_stamp.tmp.$$" "$_sync_stamp" || { rm -rf "$_tmp"; return 1; }
-    elif _sync_valid_manifest "$_cached_manifest"; then
-        say "${YELLOW}Не удалось обновить список; использую сохранённый манифест стратегий.${RESET}"
-    else
+    if [ "$_sync_can_fetch" = 1 ]; then
+        if fetch "$NF_REPO/SHA256SUMS" "$_tmp/SHA256SUMS.nfqws-menu" 30 &&
+           _sync_valid_manifest "$_tmp/SHA256SUMS.nfqws-menu"; then
+            mv -f "$_tmp/SHA256SUMS.nfqws-menu" "$_cached_upstream_manifest" || { rm -rf "$_tmp"; return 1; }
+        fi
+        _xmenu_strategy_repo=${XMENU_STRATEGY_REPO:-https://raw.githubusercontent.com/rangerxxyy/Xmenu/main}
+        if fetch "$_xmenu_strategy_repo/strategies/nfqws2/SHA256SUMS" "$_tmp/SHA256SUMS.xmenu" 30 &&
+           _sync_valid_xmenu_manifest "$_tmp/SHA256SUMS.xmenu"; then
+            mv -f "$_tmp/SHA256SUMS.xmenu" "$_cached_xmenu_manifest" || { rm -rf "$_tmp"; return 1; }
+        fi
+    fi
+    if ! _sync_valid_manifest "$_cached_upstream_manifest" && ! _sync_valid_xmenu_manifest "$_cached_xmenu_manifest"; then
         rm -rf "$_tmp"
         say "${RED}Нет доступного манифеста стратегий и проверенного офлайн-кэша.${RESET}"
         return 1
     fi
+    : > "$_tmp/SHA256SUMS"
+    if _sync_valid_manifest "$_cached_upstream_manifest"; then
+        cat "$_cached_upstream_manifest" >> "$_tmp/SHA256SUMS" || { rm -rf "$_tmp"; return 1; }
+    fi
+    if _sync_valid_xmenu_manifest "$_cached_xmenu_manifest"; then
+        cat "$_cached_xmenu_manifest" >> "$_tmp/SHA256SUMS" || { rm -rf "$_tmp"; return 1; }
+    fi
+    if ! _sync_valid_manifest "$_tmp/SHA256SUMS"; then
+        rm -rf "$_tmp"
+        say "${RED}Объединённый манифест стратегий повреждён.${RESET}"
+        return 1
+    fi
+    mv -f "$_tmp/SHA256SUMS" "$_cached_manifest" || { rm -rf "$_tmp"; return 1; }
+    printf 'checked=%s\n' "$_sync_now" > "$_sync_stamp.tmp.$$" &&
+        mv -f "$_sync_stamp.tmp.$$" "$_sync_stamp" || { rm -rf "$_tmp"; return 1; }
     rm -rf "$_tmp"
     return 0
+}
+
+strategy_source_repo() {
+    _ssr_rel=$1
+    _ssr_manifest="$ROOT_DIR/manifests/SHA256SUMS.xmenu"
+    if [ -s "$_ssr_manifest" ]; then
+        while IFS= read -r _ssr_entry || [ -n "$_ssr_entry" ]; do
+            [ "$(manifest_relpath "$_ssr_entry")" = "$_ssr_rel" ] || continue
+            printf '%s\n' "${XMENU_STRATEGY_REPO:-https://raw.githubusercontent.com/rangerxxyy/Xmenu/main}"
+            return 0
+        done < "$_ssr_manifest"
+    fi
+    printf '%s\n' "$NF_REPO"
 }
 
 strategy_names_from_manifest() {
@@ -2144,14 +2195,16 @@ XMENU_STRATEGY_ORDER
     fi
     : > "$_display"
     while IFS= read -r _display_name || [ -n "$_display_name" ]; do
+        _display_label=${_display_name%.conf}
         if [ "$_display_name" = "$_current_strategy" ]; then
-            printf '%s\t%s\n' "$_display_name" '— Активная стратегия ⚡' >> "$_display"
+            printf '%s\t%s\n' "$_display_label" '— Активная стратегия ⚡' >> "$_display"
         else
-            printf '%s\t%s\n' "$_display_name" '' >> "$_display"
+            printf '%s\t%s\n' "$_display_label" '' >> "$_display"
         fi
     done < "$_list"
+    _active_label=${_current_strategy%.conf}
     line; say "${BRIGHT_CYAN}ВЫБОР СТРАТЕГИИ — nfqws$_ver:${RESET}"; line
-    awk -F '\t' -v active="$_current_strategy" -v cyan="$BRIGHT_CYAN" -v reset="$RESET" '{
+    awk -F '\t' -v active="$_active_label" -v cyan="$BRIGHT_CYAN" -v reset="$RESET" '{
         if ($1 == active) printf "      %2d. %-28s %s— Активная стратегия ⚡%s\n", NR, $1, cyan, reset
         else printf "      %2d. %-28s %s\n", NR, $1, $2
     }' "$_display"
@@ -2170,7 +2223,7 @@ XMENU_STRATEGY_ORDER
     }
     _rel="strategies/nfqws$_ver/$_name"
     _url_rel=$(printf '%s' "$_rel" | sed 's/ /%20/g')
-    _src="$NF_REPO/$_url_rel"; _tmp="$ROOT_DIR/apply-$$.conf"
+    _src="$(strategy_source_repo "$_rel")/$_url_rel"; _tmp="$ROOT_DIR/apply-$$.conf"
     _expected=$(while IFS= read -r _entry || [ -n "$_entry" ]; do
         _h=$(printf '%s' "$_entry" | cut -c1-64)
         _p=$(manifest_relpath "$_entry")
