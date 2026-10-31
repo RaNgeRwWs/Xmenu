@@ -16,6 +16,68 @@
 
 ---
 
+## Установка
+
+Нужны Keenetic или Netcraze, установленный Entware в `/opt`, SSH-доступ с правами `root` и `curl` либо `wget` с поддержкой HTTPS. Для сетевых компонентов также нужны соответствующие компоненты прошивки и модули Netfilter.
+
+### Установить стабильный релиз
+
+Подключись к Entware по SSH и выполни:
+
+```sh
+mkdir -p /opt/bin && curl -fL --retry 3 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new && mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
+```
+
+Далее для запуска достаточно:
+
+```sh
+xmenu
+```
+
+<details>
+<summary><b>Другие способы загрузки: wget, GitHub Raw и зеркало</b></summary>
+
+Через `wget`:
+
+```sh
+mkdir -p /opt/bin && wget -O /tmp/xmenu.sh 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh' && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new && mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
+```
+
+Текущая версия ветки `main`:
+
+```sh
+mkdir -p /opt/bin && curl -fL --retry 3 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new && mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
+```
+
+Зеркало GitHub:
+
+```sh
+mkdir -p /opt/bin && curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh && sh -n /tmp/xmenu.sh && { [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } && cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new && mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
+```
+
+Каждая команда загружает файл, проверяет синтаксис, сохраняет установленную копию и запускает Xmenu. Ветка `main` может содержать изменения, добавленные после последнего релиза.
+
+Если загрузчиков нет:
+
+```sh
+opkg update && opkg install curl wget-ssl ca-certificates
+```
+
+</details>
+
+<details>
+<summary><b>Проверка файла по SHA-256</b></summary>
+
+У релиза есть файл `SHA256SUMS`. Скачай его и скрипт в один каталог:
+
+```sh
+mkdir -p /tmp/xmenu-release && cd /tmp/xmenu-release && curl -fLO 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh' && curl -fLO 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/SHA256SUMS' && sha256sum -c SHA256SUMS && sh -n xmenu-v1.0.sh
+```
+
+Ожидаемый результат: `xmenu-v1.0.sh: OK`. Контрольная сумма проверяет соответствие файла релизному артефакту.
+
+</details>
+
 ## Навигация
 
 [Быстрые сценарии](#быстрые-сценарии) · [Установка](#установка) · [Главное меню](#главное-меню) · [Компоненты](#компоненты-и-профили) · [NFQWS](#управление-nfqws2) · [DNS](#настройки-dns-серверов) · [Утилиты](#утилиты-и-диагностика) · [Сервис](#сервисное-меню) · [Entware](#opkg-и-зеркала-entware) · [Удаление](#удаление-и-резервные-копии) · [Команды](#команды-ssh)
@@ -57,83 +119,6 @@ Xmenu работает поверх Entware: выполняет пакетные
 > [!TIP]
 > Перед экспериментами со стратегиями создай архив командой `xmenu backup`. Копии `opkg.conf` управляются отдельно через **21 → 4**.
 
-
-## Установка
-
-Нужны Keenetic или Netcraze, установленный Entware в `/opt`, SSH-доступ с правами `root` и `curl` либо `wget` с поддержкой HTTPS. Для сетевых компонентов также нужны соответствующие компоненты прошивки и модули Netfilter.
-
-### Установить стабильный релиз
-
-Подключись к Entware по SSH и выполни:
-
-```sh
-mkdir -p /opt/bin
-curl -fL --retry 3 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh' -o /tmp/xmenu.sh &&
-sh -n /tmp/xmenu.sh &&
-{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
-cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new &&
-mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
-```
-
-Далее для запуска достаточно:
-
-```sh
-xmenu
-```
-
-<details>
-<summary><b>Другие способы загрузки: wget, GitHub Raw и зеркало</b></summary>
-
-Через `wget`:
-
-```sh
-mkdir -p /opt/bin
-wget -O /tmp/xmenu.sh 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh' &&
-sh -n /tmp/xmenu.sh &&
-{ [ ! -f /opt/bin/xmenu ] || cp -p /opt/bin/xmenu "/opt/bin/xmenu.bak.$(date +%Y%m%d-%H%M%S)"; } &&
-cp /tmp/xmenu.sh /opt/bin/.xmenu-new && chmod 700 /opt/bin/.xmenu-new &&
-mv -f /opt/bin/.xmenu-new /opt/bin/xmenu && xmenu
-```
-
-Текущая версия ветки `main`:
-
-```sh
-curl -fL --retry 3 'https://raw.githubusercontent.com/rangerxxyy/Xmenu/main/xmenu-v1.0.sh' -o /tmp/xmenu.sh
-```
-
-Зеркало GitHub:
-
-```sh
-curl -fL --retry 3 'https://cdn.jsdelivr.net/gh/rangerxxyy/Xmenu@main/xmenu-v1.0.sh' -o /tmp/xmenu.sh
-```
-
-После загрузки через Raw или зеркало выполни `sh -n /tmp/xmenu.sh`, сохрани установленный файл и замени `/opt/bin/xmenu`, как в основной инструкции. Ветка `main` может содержать изменения, добавленные после последнего релиза.
-
-Если загрузчиков нет:
-
-```sh
-opkg update
-opkg install curl wget-ssl ca-certificates
-```
-
-</details>
-
-<details>
-<summary><b>Проверка файла по SHA-256</b></summary>
-
-У релиза есть файл `SHA256SUMS`. Скачай его и скрипт в один каталог:
-
-```sh
-mkdir -p /tmp/xmenu-release && cd /tmp/xmenu-release
-curl -fLO 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/xmenu-v1.0.sh'
-curl -fLO 'https://github.com/rangerxxyy/Xmenu/releases/latest/download/SHA256SUMS'
-sha256sum -c SHA256SUMS
-sh -n xmenu-v1.0.sh
-```
-
-Ожидаемый результат: `xmenu-v1.0.sh: OK`. Контрольная сумма проверяет соответствие файла релизному артефакту.
-
-</details>
 
 ## Главное меню
 
@@ -226,8 +211,7 @@ sh -n xmenu-v1.0.sh
 
 Показывает каталог конфигураций для выбранной версии. Для NFQWS2 в выпуск включены **13 дополнительных конфигураций** к исходным 27 — всего **40 вариантов**, включая `configuration_3.2`, `hybrid_2.0` и `aggressive_hybrid`.
 
-- В названиях меню убраны расширения `.conf` и числовые префиксы.
-- Активная стратегия определяется сравнением с конфигом и выделяется бирюзовым.
+- Активная стратегия определяется сравнением с действующим конфигом.
 - Манифест с контрольными суммами кэшируется на час; конфиги скачиваются по выбору.
 - Для дополнительных стратегий манифест и конфиг берутся из одной ревизии репозитория.
 - Перед заменой сохраняется резервная копия, проверяется SHA-256 и синтаксис конфигурации.
@@ -263,7 +247,7 @@ wssize_disorder
 
 1. Установи NFQWS2 через пункт **4**, если пакет ещё отсутствует.
 2. Открой **11 → 1**. При доступном источнике загрузится каталог; при наличии проверенного кэша он может быть использован повторно.
-3. Выбери конфигурацию по её номеру. В меню показываются короткие имена, в файловой системе сохраняется расширение `.conf`.
+3. Выбери конфигурацию по её номеру.
 4. Xmenu проверит SHA-256 загруженного файла, подготовит конфиг и ресурсы, создаст резервную копию и заменит действующий файл.
 5. Дождись сообщения о перезапуске службы. При его ошибке проверь конфиг и вывод `/opt/etc/init.d/S51nfqws2 status`.
 6. Проверь нужные сайты и приложения из своей сети. Успешная проверка файла означает его целостность и корректный shell-синтаксис; результат обхода зависит от условий подключения.
@@ -287,7 +271,7 @@ wssize_disorder
 | `ISP_INTERFACE` | Переносится из действующего конфига буквально, включая список интерфейсов |
 | Подключённый `rkn.list` | Его привязка сохраняется при подготовке новой стратегии |
 | Ручные изменения остальных аргументов | Новая стратегия задаёт свои значения; прежние остаются в копии конфига |
-| Активный вариант в меню | Выделяется после сравнения с кэшем, а не только по сохранённому имени |
+| Активный вариант | Определяется сравнением конфигурации с проверенным кэшем |
 
 Если у тебя собственные параметры политик, портов или IPv6, сравни новый конфиг с резервной копией перед дальнейшими ручными изменениями. Xmenu не обещает автоматически объединить все пользовательские аргументы с другой стратегией.
 
@@ -402,7 +386,7 @@ wssize_disorder
 
 ## Настройки DNS-серверов
 
-**Путь: 11 → 6.** Экран показывает DNS интернет-фильтров, общие DoT/DoH и внешние DNS без шифрования без дублирующих технических секций.
+**Путь: 11 → 6.** Показывает текущие DNS интернет-фильтров, общие DoT/DoH и внешние DNS без шифрования.
 
 ```text
 DNS-серверы Keenetic
