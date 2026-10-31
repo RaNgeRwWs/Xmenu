@@ -895,7 +895,7 @@ Xmenu/
 | [warpscout](https://github.com/vernette/warpscout) | Поиск конечных точек Cloudflare WARP. |
 | [Flowseal / zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) | Источник большого IP/CIDR-списка и основа части стратегий. |
 | [zapret4rocket](https://github.com/IndeecFOX/zapret4rocket) | Источник доменного списка `rkn.list`. |
-| [Zapret-Manager](https://github.com/StressOzz/Zapret-Manager) | Справочная ссылка на инструмент для OpenWrt; установка на штатную KeeneticOS из Xmenu не выполняется. |
+| [Zapret-Manager](https://github.com/StressOzz/Zapret-Manager) | Справочная ссылка на инструмент для OpenWrt |
 
 Права на сторонние компоненты и ресурсы принадлежат их авторам; условия использования определяются лицензиями соответствующих проектов.
 
