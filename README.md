@@ -74,7 +74,7 @@ mkdir -p /tmp/xmenu-release && cd /tmp/xmenu-release && curl -fLO 'https://githu
 
 ## Навигация
 
-[Быстрые сценарии](#быстрые-сценарии) · [Установка](#установка) · [Главное меню](#главное-меню) · [Компоненты](#компоненты-и-профили) · [NFQWS](#управление-nfqws2) · [DNS](#настройки-dns-серверов) · [Утилиты](#утилиты-и-диагностика) · [Сервис](#сервисное-меню) · [Entware](#opkg-и-зеркала-entware) · [Удаление](#удаление-и-резервные-копии) · [Команды](#команды-ssh)
+[Быстрые сценарии](#быстрые-сценарии) · [Установка](#установка) · [Главное меню](#главное-меню) · [Компоненты](#компоненты-и-профили) · [NFQWS](#управление-nfqws2) · [DNS](#настройки-dns-серверов) · [Утилиты](#утилиты-и-диагностика) · [Сервис](#сервисное-меню) · [Entware](#opkg-и-зеркала-entware) · [Удаление](#удаление-и-резервные-копии) · [Команды](#команды-ssh) · [Проекты](#используемые-проекты-и-благодарности)
 
 ## Что умеет Xmenu
 
@@ -869,6 +869,36 @@ Xmenu/
 Рабочие сборки, логи и промежуточные материалы не включаются в Git. Для текстовых конфигураций и shell-файлов используется LF.
 
 </details>
+
+## Используемые проекты и благодарности
+
+Спасибо авторам и участникам проектов, чьи компоненты, ресурсы и решения используются в Xmenu.
+
+| Проект | Роль в Xmenu |
+| --- | --- |
+| [nfqws2-menu / nfqws-menu](https://github.com/rndnaame/nfqws-menu) | Источник адаптированных сервисных решений, базового каталога стратегий, blobs/lists и отдельных установщиков утилит. |
+| [XKeen](https://github.com/jameszeroX/XKeen) | Установка и управление прокси-ядрами, профили Auto, геофайлы и автозагрузка. |
+| [XKeen UI — zxc-rv](https://github.com/zxc-rv/XKeen-UI) | Веб-панель управления XKeen. |
+| [XKeen UI — umarcheh001](https://github.com/umarcheh001/Xkeen-UI) | Альтернативная веб-панель XKeen. |
+| [nfqws-keenetic](https://github.com/nfqws/nfqws-keenetic) | Пакет NFQWS v1 и его стандартные ресурсы для Keenetic. |
+| [nfqws2-keenetic](https://github.com/nfqws/nfqws2-keenetic) | Пакет NFQWS2, для которого предназначены стратегии и управление ресурсами v2. |
+| [nfqws-keenetic-web](https://github.com/nfqws/nfqws-keenetic-web) | Веб-интерфейс настройки NFQWS. |
+| [nfqws2-ui](https://github.com/zemidala/nfqws2-ui) | Дополнительная панель управления NFQWS2. |
+| [Xray-core](https://github.com/XTLS/Xray-core) | Прокси-ядро для профилей XKeen. |
+| [Mihomo](https://github.com/MetaCubeX/mihomo) | Альтернативное прокси-ядро для профилей XKeen. |
+| [Entware](https://github.com/Entware/Entware) | Среда пакетов и утилит в `/opt`, пакетный менеджер OPKG. |
+| [DPI Detector](https://github.com/Runnin4ik/dpi-detector/tree/rust) | Диагностика ограничений соединения и DNS. |
+| [KeenKit](https://github.com/spatiumstas/KeenKit) | Дополнительные инструменты управления Keenetic. |
+| [awg-compressed / awg-manager](https://github.com/rndnaame/awg-compressed) | Установщик и управление AmneziaWG. |
+| [usque-keenetic](https://github.com/side-effect-tm/usque-keenetic) | Дополнительный сетевой компонент для Keenetic. |
+| [MagiTrickle](http://bin.magitrickle.dev/) | Дополнительный инструмент маршрутизации трафика. |
+| [firc](https://github.com/hoaxisr/firc) | Маршрутизация по доменам с FakeIP. |
+| [warpscout](https://github.com/vernette/warpscout) | Поиск конечных точек Cloudflare WARP. |
+| [Flowseal / zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) | Источник большого IP/CIDR-списка и основа части стратегий. |
+| [zapret4rocket](https://github.com/IndeecFOX/zapret4rocket) | Источник доменного списка `rkn.list`. |
+| [Zapret-Manager](https://github.com/StressOzz/Zapret-Manager) | Справочная ссылка на инструмент для OpenWrt; установка на штатную KeeneticOS из Xmenu не выполняется. |
+
+Права на сторонние компоненты и ресурсы принадлежат их авторам; условия использования определяются лицензиями соответствующих проектов.
 
 ## Лицензия и отказ от ответственности
 
