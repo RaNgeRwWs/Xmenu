@@ -1564,7 +1564,8 @@ sync_strategies() {
     _sync_now=$(date +%s 2>/dev/null)
     case "$_sync_checked:$_sync_now" in *[!0-9:]*|:*) _sync_checked= ;; esac
     if [ -n "$_sync_checked" ] && [ -n "$_sync_now" ] && [ "$_sync_now" -ge "$_sync_checked" ] &&
-       [ $((_sync_now - _sync_checked)) -lt 3600 ] && _sync_valid_manifest "$_cached_manifest"; then
+       [ $((_sync_now - _sync_checked)) -lt 3600 ] && _sync_valid_manifest "$_cached_manifest" &&
+       _sync_valid_manifest "$_cached_upstream_manifest" && _sync_valid_xmenu_manifest "$_cached_xmenu_manifest"; then
         return 0
     fi
 
