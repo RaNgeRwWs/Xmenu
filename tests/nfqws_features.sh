@@ -17,7 +17,7 @@ _XMENU_FRAME_FILE="$tmp/frame"
 render_menu_content > "$tmp/main-menu"
 grep -q 'Модель: Hopper (KN-3811) KeeneticOS 5.2 (aarch64)' "$tmp/main-menu" || { echo 'FAIL: architecture is not displayed in parentheses' >&2; exit 1; }
 grep -q '11\.  Управление nfqws2' "$tmp/main-menu" || { echo 'FAIL: nfqws2 management is not item 11' >&2; exit 1; }
-grep -q '12\.  DPI Detector' "$tmp/main-menu" || { echo 'FAIL: utilities and diagnostics did not move after item 11' >&2; exit 1; }
+grep -q '12\.  Диагностика' "$tmp/main-menu" || { echo 'FAIL: diagnostics is not item 12' >&2; exit 1; }
 grep -q '16\.  Прочие утилиты' "$tmp/main-menu" || { echo 'FAIL: other utilities is not the last item in utilities and diagnostics' >&2; exit 1; }
 if grep -Eq '^[[:space:]]+(1[6-9])\.  (Выбрать и применить стратегию nfqws|Скачать/проверить blobs|Установить все blobs|Скачать rkn.list)' "$tmp/main-menu"; then echo 'FAIL: NFQWS strategy/blob actions remain in the main menu' >&2; exit 1; fi
 grep -Fq '16) xmenu_other_utilities_menu ;;' "$tmp/library.sh" || { echo 'FAIL: main-menu item 16 does not open other utilities' >&2; exit 1; }
