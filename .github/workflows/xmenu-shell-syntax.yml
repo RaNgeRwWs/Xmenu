@@ -43,8 +43,6 @@ jobs:
         run: busybox ash tests/nfqws_features.sh
       - name: Run native blob and hosts regression scenarios
         run: busybox ash tests/native_actions.sh
-      - name: Check site diagnostics
-        run: busybox ash tests/site_diagnostics.sh
       - name: Check interactive menu input in PTY
         run: python3 tests/menu_input.py
       - name: Check startup frame and background completion in PTY

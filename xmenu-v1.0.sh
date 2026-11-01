@@ -2544,153 +2544,6 @@ acquire_lock() {
     say "${YELLOW}Другая операция xmenu уже меняет настройки. Подожди и повтори.${RESET}"
     return 1
 }
-xmenu_site_check() (
-    _site_input=${1:-}
-    case "$_site_input" in
-        http://*|https://*) _site_url=$_site_input ;;
-        *://*) say 'Допустимы только http:// и https://'; return 2 ;;
-        *) _site_url="https://$_site_input" ;;
-    esac
-    if ! printf '%s\n' "$_site_url" | LC_ALL=C grep -Eq '^https?://[][A-Za-z0-9._~:/?#%+=&-]+$'; then
-        say 'Введите домен или HTTP/HTTPS URL без пробелов и учётных данных.'; return 2
-    fi
-    _site_authority=${_site_url#*://}; _site_authority=${_site_authority%%[/?#]*}
-    _site_host=$_site_authority; _site_port=443; _site_secure=1
-    case "$_site_url" in http://*) _site_port=80; _site_secure=0 ;; esac
-    case "$_site_authority" in
-        \[*\]*)
-            _site_host=${_site_authority#\[}; _site_host=${_site_host%%\]*}
-            _site_tail=${_site_authority#*\]}
-            case "$_site_tail" in '') : ;; :*) _site_port=${_site_tail#:} ;; *) return 2 ;; esac
-            printf '%s\n' "$_site_host" | grep -Eq '^[0-9A-Fa-f:]+$' || return 2 ;;
-        *:*) _site_host=${_site_authority%%:*}; _site_port=${_site_authority#*:} ;;
-    esac
-    [ -n "$_site_host" ] || { say 'Не указан адрес сайта.'; return 2; }
-    case "$_site_port" in ''|*[!0-9]*) say 'Некорректный порт.'; return 2 ;; esac
-    [ "${#_site_port}" -le 5 ] && [ "$_site_port" -ge 1 ] && [ "$_site_port" -le 65535 ] || { say 'Порт должен быть от 1 до 65535.'; return 2; }
-    case "$_site_host" in
-        *:*) : ;;
-        *) printf '%s\n' "$_site_host" | LC_ALL=C awk '
-            length($0)>253 {exit 1}
-            {n=split($0,a,"."); for(i=1;i<=n;i++) if(length(a[i])<1 || length(a[i])>63 || a[i]!~/^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) exit 1}' || { say 'Некорректное имя сайта.'; return 2; } ;;
-    esac
-    command -v curl >/dev/null 2>&1 || { say 'Для диагностики нужен curl: opkg install curl ca-bundle'; return 2; }
-    umask 077
-    _site_tmp=$(mktemp -d /tmp/xmenu-site-XXXXXX) || return 2
-    trap 'rm -rf "$_site_tmp"' EXIT
-    trap 'exit 130' INT TERM HUP
-    line
-    say "${CYAN}Диагностика сайта: $_site_host (порт $_site_port)${RESET}"
-    say 'Проверяю DNS → TCP → TLS → HTTP. Ожидание — до 15 секунд.'
-    _site_rc=0
-    curl -q --noproxy '*' --proto '=http,https' --globoff --connect-timeout 8 --max-time 15 --retry 0 \
-        --head --silent --show-error --output /dev/null --url "$_site_url" \
-        --write-out 'code=%{http_code}\nip=%{remote_ip}\ndns=%{time_namelookup}\ntcp=%{time_connect}\ntls=%{time_appconnect}\ntotal=%{time_total}\n' \
-        > "$_site_tmp/metrics" 2> "$_site_tmp/error" || _site_rc=$?
-    _site_code=$(sed -n 's/^code=//p' "$_site_tmp/metrics")
-    _site_ip=$(sed -n 's/^ip=//p' "$_site_tmp/metrics")
-    _site_dns=$(sed -n 's/^dns=//p' "$_site_tmp/metrics")
-    _site_tcp=$(sed -n 's/^tcp=//p' "$_site_tmp/metrics")
-    _site_tls=$(sed -n 's/^tls=//p' "$_site_tmp/metrics")
-    _site_dns_ok=0; _site_tcp_ok=0; _site_tls_ok=0; _site_http_ok=0
-    awk -v n="$_site_dns" 'BEGIN {exit !(n+0>0)}' && _site_dns_ok=1
-    awk -v n="$_site_tcp" 'BEGIN {exit !(n+0>0)}' && _site_tcp_ok=1
-    awk -v n="$_site_tls" 'BEGIN {exit !(n+0>0)}' && _site_tls_ok=1
-    case "$_site_code" in [1-5][0-9][0-9]) _site_http_ok=1; _site_tcp_ok=1; [ "$_site_secure" = 0 ] || _site_tls_ok=1 ;; esac
-    case "$_site_rc" in 35|51|58|59|60|64|77) _site_tls_ok=0 ;; esac
-    _site_result=1
-    _site_literal=0
-    case "$_site_host" in *:*) _site_literal=1 ;; *[!0-9.]*) : ;; *) _site_literal=1 ;; esac
-    if [ "$_site_literal" = 1 ]; then
-        say '[1/4] DNS: пропущен — указан IP-адрес.'
-        _site_summary='Проверка соединения по IP-адресу не завершена.'
-    elif [ "$_site_rc" = 6 ]; then
-        say "${RED}[1/4] DNS: имя сайта не найдено.${RESET}"
-        _site_summary='Не удалось получить IP-адрес. Проверьте написание домена и доступность вашего DNS.'
-    elif [ -n "$_site_ip" ] || [ "$_site_tcp_ok" = 1 ] || [ "$_site_dns_ok" = 1 ] || [ "$_site_rc" = 7 ]; then
-        say "${GREEN}[1/4] DNS / адрес назначения: ${_site_ip:-$_site_host}${RESET}"
-        _site_summary='Адрес получен, но соединение не завершено.'
-    else
-        say "${YELLOW}[1/4] DNS: результат не подтверждён.${RESET}"
-        _site_summary='Проверка не завершена. Возможна задержка DNS или ошибка инструмента.'
-    fi
-    if [ "$_site_tcp_ok" = 1 ]; then
-        say "${GREEN}[2/4] TCP: соединение установлено.${RESET}"
-    elif [ "$_site_rc" = 6 ] || { [ "$_site_dns_ok" = 0 ] && [ -z "$_site_ip" ] && [ "$_site_rc" != 7 ]; }; then
-        say '[2/4] TCP: результат не подтверждён.'
-    else
-        say "${RED}[2/4] TCP: соединение не установлено.${RESET}"
-        [ "$_site_rc" = 6 ] || _site_summary='Нет TCP-соединения. Проверьте доступность сайта, порт, маршрут и правила сети.'
-    fi
-    if [ "$_site_secure" = 0 ]; then
-        say '[3/4] TLS: не используется для HTTP.'
-    elif [ "$_site_tls_ok" = 1 ]; then
-        say "${GREEN}[3/4] TLS: защищённое соединение установлено, сертификат проверен.${RESET}"
-    elif [ "$_site_tcp_ok" = 1 ]; then
-        say "${RED}[3/4] TLS: защищённое соединение не установлено.${RESET}"
-        _site_summary='TCP работает, но TLS не завершён. Возможны ошибка сертификата, неверное время роутера или обрыв соединения.'
-    else
-        say '[3/4] TLS: не проверен — нет TCP-соединения.'
-    fi
-    if [ "$_site_http_ok" = 1 ]; then
-        say "${CYAN}[4/4] HTTP: ответ $_site_code${RESET}"
-        case "$_site_code" in
-            2??) _site_summary='Все необходимые этапы пройдены. Сервер отвечает на запрос с роутера.'; _site_result=0 ;;
-            3??) _site_summary='Сервер доступен и перенаправляет запрос. Конечная страница перенаправления не проверялась.'; _site_result=0 ;;
-            401|403) _site_summary='Сеть и соединение работают. Сервер ограничил доступ: возможны авторизация или защита от автоматических запросов.' ;;
-            404|410) _site_summary='Сервер доступен, но запрошенная страница не найдена.' ;;
-            405|501) _site_summary='Сервер доступен, но не поддерживает диагностический HEAD-запрос. Открытие страницы в браузере требует отдельной проверки.' ;;
-            429) _site_summary='Сервер доступен, но ограничивает частоту запросов. Повторите позже.' ;;
-            5??) _site_summary='Соединение работает. Ошибку вернул сервер или промежуточный узел.' ;;
-            *) _site_summary='Сервер доступен, но вернул ошибку HTTP. Проверьте адрес страницы.' ;;
-        esac
-    else
-        say '[4/4] HTTP: ответ не получен.'
-        if [ "$_site_tls_ok" = 1 ] || { [ "$_site_secure" = 0 ] && [ "$_site_tcp_ok" = 1 ]; }; then
-            _site_summary='Соединение установлено, но HTTP-ответ не получен. Возможны ожидание сервера или обрыв передачи.'
-        fi
-    fi
-    case "$_site_rc" in
-        1|2|3|4) _site_summary='curl не смог выполнить проверку. Проверьте URL и поддержку HTTPS установленной версией curl.' ;;
-        60|51) _site_summary='Не прошла проверка сертификата TLS. Проверьте дату роутера, сертификат сайта и пакет ca-bundle.' ;;
-        77) _site_summary='curl не смог прочитать хранилище сертификатов. Проверьте установку ca-bundle.' ;;
-    esac
-    line
-    say "${CYAN}Итог${RESET}"
-    say "$_site_summary"
-    _site_total=$(sed -n 's/^total=//p' "$_site_tmp/metrics")
-    awk -v d="$_site_dns" -v c="$_site_tcp" -v t="$_site_tls" -v total="$_site_total" '
-        BEGIN {
-            if(d+0>0) printf "DNS: %.0f мс",d*1000; else printf "DNS: —"
-            if(c+0>0) printf " · TCP: %.0f мс",(c-d)*1000
-            if(t+0>0) printf " · TLS: %.0f мс",(t-c)*1000
-            if(total+0>0) printf " · Всего: %.2f с",total
-            printf "\n"
-        }'
-    [ "$_site_rc" != 28 ] || say 'Достигнут лимит ожидания. Сам по себе тайм-аут не доказывает блокировку.'
-    say 'Проверка идёт с роутера. Работа браузера и загрузка всей страницы могут отличаться.'
-    return "$_site_result"
-)
-
-xmenu_diagnostics_menu() {
-    while :; do
-        line; say "${CYAN}Диагностика${RESET}"
-        menu_item 1 'Диагностика сайта — DNS / TCP / TLS / HTTP'
-        menu_item 2 'DPI Detector'
-        menu_item 0 'Назад'
-        _read_or_eof 'Выберите пункт: ' || return 0
-        case "$_read_value" in
-            1)
-                _read_or_eof 'Домен или URL (0 — назад): ' || return 0
-                case "$_read_value" in 0|'') continue ;; esac
-                xmenu_site_check "$_read_value" || :
-                pause ;;
-            2) launch_dpi; pause ;;
-            0) return 0 ;;
-        esac
-    done
-}
-
 launch_dpi() {
     _dpi_bin='/opt/bin/dpi-detector'
     if [ ! -x "$_dpi_bin" ]; then
@@ -6025,7 +5878,7 @@ render_menu_content() {
         menu_item 11 'nfqws2 management'
         say ""
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
-        menu_item 12 'Diagnostics'
+        menu_item 12 'DPI Detector (DNS/16 KB)'
         menu_item 13 'TG WS Proxy Rust'
         menu_item 14 'KeenKit'
         menu_item 15 'awg-manager'
@@ -6057,7 +5910,7 @@ render_menu_content() {
         menu_item 11 'Управление nfqws2'
         say ""
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
-        menu_item 12 'Диагностика'
+        menu_item 12 'DPI Detector (DNS/16kb)'
         menu_item 13 'TG WS Proxy Rust'
         menu_item 14 'KeenKit'
         menu_item 15 'awg-manager'
@@ -6554,7 +6407,6 @@ main() {
     configure_locale
     require_root || return 1
     case "${1:-menu}" in
-        site-check|diagnose-site) xmenu_site_check "${2:-}"; return $? ;;
         discord-fix-rules) xmenu_discord_rules_apply; return $? ;;
         discord-fix-unrules) xmenu_discord_rules_remove; return $? ;;
         discord-fix-status) xmenu_discord_status; return $? ;;
@@ -6690,7 +6542,7 @@ main() {
             9) install_manual_bundle_profile mihomo; invalidate_core_version_cache; pause ;;
             10) install_manual_bundle_profile xray; invalidate_core_version_cache; pause ;;
             11) xmenu_nf_manage_menu ;;
-            12) xmenu_diagnostics_menu ;;
+            12) launch_dpi; pause ;;
             13) install_tg_ws_proxy_rust; pause ;;
             14) install_keenkit; pause ;;
             15) install_awg_manager; pause ;;
