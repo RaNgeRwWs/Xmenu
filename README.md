@@ -777,6 +777,16 @@ xmenu dns-check
 
 Для архива важных конфигураций доступна команда `xmenu backup`. Пункт **20** удаляет сам Xmenu и предлагает выбрать, сохранять ли его резервные копии.
 
+### Полное удаление Xmenu и всех его резервных копий
+
+Выйдите из Xmenu и выполните по SSH от root одну команду:
+
+```sh
+sh -c 'set -e; t=$(mktemp); trap '\''rm -f "$t" "$t.new"'\'' 0; if command -v crontab >/dev/null 2>&1 && crontab -l > "$t" 2>/dev/null; then { grep -Fv "/opt/bin/xmenu sync" "$t" || :; } > "$t.new"; crontab "$t.new"; fi; rm -f /opt/bin/xmenu /opt/bin/xmenu.bak*; rm -rf /opt/etc/xmenu /opt/etc/xkeen-menu'
+```
+
+Удаляются команда `xmenu`, её копии `xmenu.bak*`, данные и все резервные копии в `/opt/etc/xmenu`, прежний каталог `/opt/etc/xkeen-menu` и задача автосинхронизации Xmenu в cron. **Резервные копии из этих каталогов будут удалены без подтверждения.** Установленные XKeen, NFQWS, панели и их действующие настройки сохраняются. Общий каталог стратегий `/opt/etc/nfqws-menu/strategies` также сохраняется, поскольку может использоваться другим меню.
+
 ## Обновление Xmenu
 
 - **U** в главном меню проверяет наличие новой версии и выводит результат.
