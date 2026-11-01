@@ -232,7 +232,7 @@ version_is_older 1.3.3 1.4.1 || fail 'version ordering'
     cp "$strategy_manifest_fixture" "$ROOT_DIR/manifests/SHA256SUMS.nfqws-menu"
     cp "$strategy_manifest_fixture" "$ROOT_DIR/manifests/SHA256SUMS.xmenu"
     printf '0123456789abcdef0123456789abcdef01234567\n' > "$ROOT_DIR/manifests/XMENU_REVISION"
-    printf 'checked=%s\n' "$(date +%s)" > "$XMENU_STRATEGY_SYNC_CACHE"
+    printf 'checked=%s\ncatalog=2\n' "$(date +%s)" > "$XMENU_STRATEGY_SYNC_CACHE"
     ensure_base() { printf 'ensure_base\n' >> "$strategy_fetch_log"; return 0; }
     fetch() {
         printf '%s\n' "$1" >> "$strategy_fetch_log"
@@ -302,7 +302,7 @@ _XMENU_DEVICE_INFO_CACHE='Hopper (NC-3811)|5.1.7'
 _XMENU_ARCH_CACHE=aarch64
 CYAN=$(printf '\033[36m')
 RESET=$(printf '\033[0m')
-xmenu_cached_remote_version() { printf '1.4.4'; }
+xmenu_cached_remote_version() { printf '9.9.9'; }
 render_component_statuses() {
     say 'Установленные компоненты:'
     component_table_header
@@ -313,22 +313,22 @@ render_component_statuses() {
     done
 }
 render_menu > "$test_dir/main-menu.txt"
-test "$(wc -l < "$test_dir/main-menu.txt")" -le 54 || fail 'menu still exceeds screenshot height'
-grep -q '21\. .*Настройки OPKG' "$test_dir/main-menu.txt" || fail 'OPKG action missing'
+test "$(wc -l < "$test_dir/main-menu.txt")" -le 55 || fail 'menu still exceeds screenshot height'
+grep -q '22\. .*Настройки OPKG' "$test_dir/main-menu.txt" || fail 'OPKG action missing'
 if grep -q 'U\. .*Проверить наличие обновления' "$test_dir/main-menu.txt"; then fail 'standalone U update row remains in menu'; fi
-grep -q '17\. .*Сменить язык: RU / EN (change language)' "$test_dir/main-menu.txt" || fail 'language option missing'
-grep -q '11\. .*Управление nfqws2' "$test_dir/main-menu.txt" || fail 'nfqws2 management item missing'
-grep -q '16\. .*Прочие утилиты' "$test_dir/main-menu.txt" || fail 'other utilities item missing'
+grep -q '18\. .*Сменить язык: RU / EN (change language)' "$test_dir/main-menu.txt" || fail 'language option missing'
+grep -q '12\. .*Управление nfqws2' "$test_dir/main-menu.txt" || fail 'nfqws2 management item missing'
+grep -q '17\. .*Прочие утилиты' "$test_dir/main-menu.txt" || fail 'other utilities item missing'
 if grep -q 'Интерфейс и язык:\|26\. .*резервную копию' "$test_dir/main-menu.txt"; then fail 'removed menu entry remains'; fi
 grep -q '0\. .*Выход' "$test_dir/main-menu.txt" || fail 'exit missing'
-grep -Fq "${CYAN}Модель: Hopper (NC-3811) 5.1.7 (aarch64)" "$test_dir/main-menu.txt" || fail 'compact cyan device line missing'
+grep -Fq "${RESET}${WHITE}Модель: Hopper (NC-3811) ${BRIGHT_CYAN}5.1.7 ${RESET}${GREEN}(aarch64)${RESET}" "$test_dir/main-menu.txt" || fail 'device colors differ from model/firmware/architecture layout'
 grep -Fq "${CYAN}  ↑" "$test_dir/main-menu.txt" || fail 'update notice is not cyan'
 escape=$(printf '\033')
 sed "s/$escape\[[0-9;]*m//g" "$test_dir/main-menu.txt" > "$test_dir/plain-menu.txt"
 update_line=$(grep -n '↑ Доступно обновление' "$test_dir/plain-menu.txt" | cut -d: -f1)
-grep -q 'Xmenu ◆ v1.4.3' "$test_dir/plain-menu.txt" || fail 'script version was not raised to 1.4.3'
-grep -q 'Выбери пункт 20 для установки' "$test_dir/plain-menu.txt" || fail 'update notice lost update action hint'
-LC_ALL=C awk '/Xmenu ◆ v1.4.3/ {
+grep -q 'Xmenu ◆ v1.4.4' "$test_dir/plain-menu.txt" || fail 'script version was not raised to 1.4.4'
+grep -q 'Выбери пункт 21 для установки' "$test_dir/plain-menu.txt" || fail 'update notice lost update action hint'
+LC_ALL=C awk '/Xmenu ◆ v1.4.4/ {
     match($0, /[^ ]/); if (RSTART-1 != 12) exit 1
     title_line=NR; found=1
 } title_line && NR == title_line + 1 && $0 !~ /^=+$/ {exit 1}

@@ -23,7 +23,7 @@ def check_startup(order, rows, columns):
         harness = root / "startup.sh"
         events = {
             "components": 'touch "$ROOT_DIR/ready"',
-            "update": 'printf "1.4.4" > "$ROOT_DIR/version"',
+            "update": 'printf "9.9.9" > "$ROOT_DIR/version"',
         }
         harness.write_text(
             (
@@ -36,12 +36,12 @@ def check_startup(order, rows, columns):
             'XMENU_COMPONENT_CACHE_TIME="$ROOT_DIR/components.time"\n'
             'XMENU_COMPONENT_REFRESH_LOCK="$ROOT_DIR/component.lock"\n'
             'XMENU_UPDATE_LOCK="$ROOT_DIR/update.lock"; LOCK_DIR="$ROOT_DIR/operation.lock"\n'
-            'mkdir -p "$BACKUP_DIR"; printf "1.4.3" > "$ROOT_DIR/version"\n'
+            'mkdir -p "$BACKUP_DIR"; printf "1.4.4" > "$ROOT_DIR/version"\n'
             'configure_locale() { :; }; require_root() { :; }; require_opkg() { :; }\n'
             'migrate_legacy_xmenu_data() { :; }; install_xmenu_command() { :; }; ensure_dirs() { :; }\n'
             'get_router() { printf "Hopper (NC-3811)|5.1.7"; }; get_arch() { printf aarch64; }\n'
             'xmenu_cached_remote_version() { cat "$ROOT_DIR/version"; }\n'
-            'xmenu_update_cache_is_fresh() { test "$(cat "$ROOT_DIR/version")" = 1.4.4; }\n'
+            'xmenu_update_cache_is_fresh() { test "$(cat "$ROOT_DIR/version")" = 9.9.9; }\n'
             'component_status_cache_fresh() { test -f "$ROOT_DIR/ready"; }\n'
             'start_component_status_refresh() { return 1; }\n'
             'render_component_statuses_sync() {\n'
@@ -49,11 +49,11 @@ def check_startup(order, rows, columns):
             '  printf "xkeen\\t1.0\\n" > "$XMENU_COMPONENT_CACHE"\n'
             '  XMENU_COMPONENT_REFRESH_PENDING=1\n'
             '}\n'
-            'opkg_settings_menu() { printf "SELECTED=21\\n"; exit 0; }\n'
+            'opkg_settings_menu() { printf "SELECTED=22\\n"; exit 0; }\n'
             'xmenu_start_update_check() {\n'
             '  XMENU_UPDATE_CHECK_PENDING=1\n'
-            f'  (command sleep 0.3; {events[order[0]]}; kill -USR1 "$$"; '
-            f'command sleep 0.5; {events[order[1]]}; kill -USR1 "$$") &\n'
+            f'  (python3 -c "import time; time.sleep(.3)"; {events[order[0]]}; kill -USR1 "$$"; '
+            f'python3 -c "import time; time.sleep(.5)"; {events[order[1]]}; kill -USR1 "$$") &\n'
             '}\nmain\n'
             ),
             encoding="utf-8",
@@ -96,18 +96,18 @@ def check_startup(order, rows, columns):
             assert "Запуск Xmenu".encode() not in output, "startup banner should not be shown"
             assert b"Starting Xmenu" not in output, "startup banner should not be shown"
             os.write(master, b"2")
-            collect(b"v1.4.4")
+            collect(b"v9.9.9")
             time.sleep(0.5)
             assert process.poll() is None, "background completion closed menu"
-            os.write(master, b"1\n")
-            collect(b"SELECTED=21")
+            os.write(master, b"2\n")
+            collect(b"SELECTED=22")
             assert process.wait(timeout=3) == 0
             assert output.count(b"\x1b[2J") == 1, "startup cleared the whole menu more than once"
-            assert output.count("Xmenu ◆ v1.4.3".encode()) == 1, "startup printed a second menu"
+            assert output.count("Xmenu ◆ v1.4.4".encode()) == 1, "startup printed a second menu"
             assert output.count(b"[?]") == 1, "startup repeated the prompt"
-            assert output.count(b"v1.4.4") == 1, "update notice duplicated"
+            assert output.count(b"v9.9.9") == 1, "update notice duplicated"
             offsets = re.findall(rb"\x1b7\x1b\[(\d+)A", output)
-            assert len(offsets) == 1, "notice was not patched exactly once"
+            assert len(offsets) == 1, "notice was not patched exactly once: " + output.decode(errors='replace')
             assert (int(offsets[0]) > 1) == (rows == 70), "wrong visible notice slot"
         finally:
             if process.poll() is None:

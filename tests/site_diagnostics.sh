@@ -11,7 +11,7 @@ curl() {
 }
 check() {
     result=0
-    xmenu_site_check "$1" > "$tmp/report" || result=$?
+    xmenu_site_check_legacy "$1" > "$tmp/report" || result=$?
     grep -Fq "$2" "$tmp/report" || { cat "$tmp/report"; exit 1; }
 }
 code=200 ip=1.1.1.1 dns=0.01 tcp=0.02 tls=0.03 rc=0

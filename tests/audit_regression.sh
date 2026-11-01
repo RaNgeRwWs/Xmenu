@@ -78,10 +78,10 @@ EOF
     grep -Fq 'ISP_INTERFACE="eth3 eth4" # keep both' "$audit_dir/candidate.conf" || fail 'interface value or comment lost'
     if LC_ALL=C grep -q "$(printf '\r')" "$audit_dir/candidate.conf"; then fail 'CRLF not normalized'; fi
     chmod 640 "$audit_dir/live.conf"
-    saved_mode=$(stat -c '%a' "$audit_dir/live.conf")
+    saved_mode=$(ls -ld "$audit_dir/live.conf" | awk '{print $1}')
     replace_shell_config "$audit_dir/candidate.conf" "$audit_dir/live.conf" || fail 'atomic replacement failed'
     grep -Fq 'NFQWS_ARGS="--new"' "$audit_dir/live.conf" || fail 'new config not installed'
-    test "$(stat -c '%a' "$audit_dir/live.conf")" = "$saved_mode" || fail 'config mode changed'
+    test "$(ls -ld "$audit_dir/live.conf" | awk '{print $1}')" = "$saved_mode" || fail 'config mode changed'
     saved_hash=$(sha256_file "$audit_dir/live.conf")
     printf 'NFQWS_ARGS="unterminated\n' > "$audit_dir/invalid.conf"
     if replace_shell_config "$audit_dir/invalid.conf" "$audit_dir/live.conf" 2>/dev/null; then fail 'invalid shell config installed'; fi
@@ -157,7 +157,7 @@ EOF
     mkdir -p "$audit_dir/backup-a" "$audit_dir/backup-b" "$audit_dir/parallel/root"
     printf 'FIRST\n' > "$audit_dir/backup-a/settings.conf"
     printf 'SECOND\n' > "$audit_dir/backup-b/settings.conf"
-    touch -t 200001010000 "$audit_dir/backup-a/settings.conf" "$audit_dir/backup-b/settings.conf"
+    python3 -c 'import os,sys; [os.utime(p, (946684800, 946684800)) for p in sys.argv[1:]]' "$audit_dir/backup-a/settings.conf" "$audit_dir/backup-b/settings.conf"
     cat > "$audit_dir/backup-worker.sh" <<'EOF'
 #!/bin/sh
 set -eu
@@ -172,7 +172,7 @@ cp() {
     while [ "$(find "$ROOT_DIR" -name 'arrived.*' | wc -l)" -lt 2 ]; do
         attempts=$((attempts + 1))
         [ "$attempts" -lt 100 ] || return 1
-        sleep 0.05
+        python3 -c 'import time; time.sleep(.05)'
     done
     command cp "$@"
 }
@@ -188,7 +188,7 @@ EOF
     grep -l FIRST "$audit_dir/parallel/backups"/* >/dev/null || fail 'first backup content lost'
     grep -l SECOND "$audit_dir/parallel/backups"/* >/dev/null || fail 'second backup content lost'
     for archive in "$audit_dir/parallel/backups"/*; do
-        test "$(stat -c '%Y' "$archive")" -gt 946684800 || fail 'backup still has old source timestamp'
+        find "$archive" -newer "$audit_dir/backup-a/settings.conf" | grep -q . || fail 'backup still has old source timestamp'
     done
 )
 
@@ -288,16 +288,16 @@ EOF
     mkdir -p "$audit_dir/no-timeout"
     no_timeout_baseline="$audit_dir/no-timeout-command-baseline"
     no_timeout_marker="$audit_dir/no-timeout-command-ran"
-    printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_baseline" > "$audit_dir/no-timeout/command"
+    printf '#!/bin/sh\nprintf ran > "%s"\n' "$no_timeout_baseline" > "$audit_dir/no-timeout/command"
     chmod +x "$audit_dir/no-timeout/command"
-    printf '#!/usr/bin/bash\nprintf "nfqws2-keenetic - 1.3.1\\n"\n' > "$audit_dir/no-timeout/opkg"
+    printf '#!/bin/sh\nprintf "nfqws2-keenetic - 1.3.1\\n"\n' > "$audit_dir/no-timeout/opkg"
     chmod +x "$audit_dir/no-timeout/opkg"
-    printf '#!/usr/bin/bash\nprintf "Mihomo Meta v1.19.32\\n"\n' > "$audit_dir/no-timeout/mihomo"
+    printf '#!/bin/sh\nprintf "Mihomo Meta v1.19.32\\n"\n' > "$audit_dir/no-timeout/mihomo"
     chmod +x "$audit_dir/no-timeout/mihomo"
-    printf '#!/usr/bin/bash\nprintf "DPI Detector 1.2.3\\n"\n' > "$audit_dir/no-timeout/dpi-detector"
+    printf '#!/bin/sh\nprintf "DPI Detector 1.2.3\\n"\n' > "$audit_dir/no-timeout/dpi-detector"
     chmod +x "$audit_dir/no-timeout/dpi-detector"
     rm -f "/tmp/xmenu-mihomo-version-$$"
-    printf '#!/usr/bin/bash\nexec "%s" "$@"\n' "$(command -v sed)" > "$audit_dir/no-timeout/sed"
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v sed)" > "$audit_dir/no-timeout/sed"
     chmod +x "$audit_dir/no-timeout/sed"
     PATH="$audit_dir/no-timeout"
     export PATH
@@ -310,7 +310,7 @@ EOF
     test "$no_timeout_mihomo_version" = 'Mihomo Meta v1.19.32' || fail 'Mihomo version not detected without timeout'
     no_timeout_dpi_version=$(xmenu_run_version_probe 3 "$audit_dir/no-timeout/dpi-detector" --version) || fail 'DPI version probe failed without timeout'
     test "$no_timeout_dpi_version" = 'DPI Detector 1.2.3' || fail 'DPI version not detected without timeout'
-    printf '#!/usr/bin/bash\nprintf ran > "%s"\n' "$no_timeout_marker" > "$audit_dir/no-timeout/command"
+    printf '#!/bin/sh\nprintf ran > "%s"\n' "$no_timeout_marker" > "$audit_dir/no-timeout/command"
     if xmenu_run_bounded 1 "$audit_dir/no-timeout/command"; then
         fail 'command without timeout support was reported as bounded'
     fi

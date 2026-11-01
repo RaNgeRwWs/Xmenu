@@ -1,6 +1,6 @@
 #!/bin/sh
-# Xmenu ◆ v1.4.3 — Entware / BusyBox ash
-APP_VERSION="1.4.3"
+# Xmenu ◆ v1.4.4 — Entware / BusyBox ash
+APP_VERSION="1.4.4"
 # XKEEN_MENU_AUTO_YES=1/true/yes/on отключает подтверждение только для NFQWS2 UI в install-all.
 ROOT_DIR="/opt/etc/xmenu"
 BACKUP_DIR="$ROOT_DIR/backups"
@@ -130,6 +130,54 @@ xmenu_run_bounded() {
         timeout "$_xrb_limit" "$@"
     elif command -v busybox >/dev/null 2>&1 && busybox timeout "$_xrb_limit" true >/dev/null 2>&1; then
         busybox timeout "$_xrb_limit" "$@"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$_xrb_limit" "$@" <<'XMENU_TIMEOUT'
+import math
+import os
+import signal
+import subprocess
+import sys
+
+child = None
+
+def terminate():
+    if child is None:
+        return
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=.3)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    child.wait()
+
+def cancel(signum, frame):
+    terminate()
+    raise SystemExit(128 + signum)
+
+try:
+    limit = float(sys.argv[1])
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError('Invalid timeout')
+    signal.signal(signal.SIGTERM, cancel)
+    signal.signal(signal.SIGINT, cancel)
+    child = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        code = child.wait(timeout=limit)
+        sys.exit(code if code >= 0 else 128 - code)
+    except subprocess.TimeoutExpired:
+        terminate()
+        sys.exit(124)
+except (OSError, ValueError):
+    terminate()
+    sys.exit(127)
+XMENU_TIMEOUT
     else
         # Эти команды читают только локальную базу пакетов; разрешаем их без
         # timeout, чтобы отсутствие утилиты не скрывало установленные компоненты.
@@ -798,6 +846,58 @@ upgrade_nf_web_package() {
         opkg install nfqws-keenetic-web
     fi
 }
+install_nfqws1() (
+    line; say "${CYAN}nfqws v1 — поэтапная установка / обновление${RESET}"
+    require_opkg || return 1
+    _nf1_conf=${XMENU_NFQWS1_CONF:-/opt/etc/nfqws/nfqws.conf}
+    _nf1_init=${XMENU_NFQWS1_INIT:-/opt/etc/init.d/S51nfqws}
+    _nf1_feed=${XMENU_NFQWS1_FEED:-/opt/etc/opkg/nfqws-keenetic.conf}
+    _nf1_tmp=''
+    trap '[ -z "$_nf1_tmp" ] || rm -f "$_nf1_tmp"' 0
+    trap 'exit 130' INT TERM HUP
+    say '[1/5] Проверка Entware и совместимости'
+    _nf1_arch=$(get_arch) || return 1
+    case "$_nf1_arch" in aarch64|armv7|mipsel|mips|mips64|x86_64|x86|lexra) : ;; *) say 'Архитектура Entware не поддерживается пакетом nfqws v1.'; return 1 ;; esac
+    for _nf1_conflict in nfqws2-keenetic tpws-keenetic; do
+        if is_installed "$_nf1_conflict"; then
+            say "${YELLOW}Установлен несовместимый пакет: $_nf1_conflict. Установка v1 остановлена.${RESET}"
+            say 'Сначала сохрани конфигурацию и удали конфликтующий пакет через раздел удаления компонентов.'
+            return 1
+        fi
+    done
+    [ ! -L "$_nf1_feed" ] && [ ! -L "$_nf1_conf" ] && [ ! -L "$_nf1_init" ] || { say 'Конфигурация, репозиторий или служба являются симлинком. Установка остановлена.'; return 1; }
+    confirm 'Установить / обновить nfqws v1? Пакет автоматически запускает службу.' || return 0
+    say '[2/5] Обновление индексов и зависимости'
+    opkg update || { say 'Индексы OPKG не обновлены. Установка остановлена.'; return 1; }
+    if is_installed wget-nossl; then opkg remove wget-nossl || return 1; fi
+    opkg install ca-certificates wget-ssl || { say 'Зависимости не установлены.'; return 1; }
+    say '[3/5] Официальный репозиторий nfqws-keenetic'
+    backup_file "$_nf1_feed" || return 1
+    backup_file "$_nf1_conf" || return 1
+    mkdir -p "$(dirname "$_nf1_feed")" || return 1
+    _nf1_tmp=$(mktemp "$_nf1_feed.XXXXXX") || return 1
+    printf 'src/gz nfqws-keenetic https://nfqws.github.io/nfqws-keenetic/all\n' > "$_nf1_tmp" || return 1
+    chmod 644 "$_nf1_tmp" && mv -f "$_nf1_tmp" "$_nf1_feed" || return 1
+    _nf1_tmp=''
+    say '[4/5] Установка / обновление пакета'
+    opkg update || { say 'Официальный репозиторий недоступен. Пакет не изменялся.'; return 1; }
+    if is_installed nfqws-keenetic; then
+        opkg upgrade nfqws-keenetic || return 1
+    else
+        opkg install nfqws-keenetic || return 1
+    fi
+    say '[5/5] Проверка конфигурации и службы'
+    [ -f "$_nf1_conf" ] && sh -n "$_nf1_conf" || { say 'Конфигурация не найдена или содержит ошибку синтаксиса.'; return 1; }
+    [ -x "$_nf1_init" ] || { say 'Скрипт службы S51nfqws не установлен.'; return 1; }
+    if ! "$_nf1_init" status; then
+        say "${YELLOW}Пакет установлен, но работа службы не подтверждена. Проверь ISP_INTERFACE и конфигурацию.${RESET}"
+        return 1
+    fi
+    invalidate_component_status_cache
+    say "${GREEN}nfqws v1 установлен / обновлён. Служба отвечает.${RESET}"
+    say "Конфигурация: $_nf1_conf"
+)
+
 install_nfqws2() {
     line; say "${CYAN}nfqws2${RESET} — движок обхода DPI"
     # Это прямая OPKG-операция: ensure_network() мог запускать предварительный opkg update
@@ -1528,7 +1628,7 @@ manifest_relpath() {
 }
 sync_strategies() {
     # Combine the upstream catalog with Xmenu-hosted NFQWS2 configs.
-    mkdir -p "$CACHE_DIR/nfqws1" "$CACHE_DIR/nfqws2" "$CACHE_DIR/blobs" "$ROOT_DIR/manifests" || return 1
+    mkdir -p "$CACHE_DIR/nfqws1" "$CACHE_DIR/nfqws2/additional" "$CACHE_DIR/blobs" "$ROOT_DIR/manifests" || return 1
     _cached_manifest="$ROOT_DIR/manifests/SHA256SUMS"
     _cached_upstream_manifest="$ROOT_DIR/manifests/SHA256SUMS.nfqws-menu"
     _cached_xmenu_manifest="$ROOT_DIR/manifests/SHA256SUMS.xmenu"
@@ -1538,7 +1638,7 @@ sync_strategies() {
         [ -s "$1" ] && awk '
             length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ {
                 p=substr($0, index($0, $2)); sub(/^\*/, "", p)
-                if (p ~ /^strategies\/nfqws[12]\/[^/]+\.conf$/) ok++
+                if (p ~ /^strategies\/nfqws[12]\/(additional\/)?[^/]+\.conf$/) ok++
             }
             END {exit(ok ? 0 : 1)}
         ' "$1"
@@ -1547,7 +1647,7 @@ sync_strategies() {
         [ -s "$1" ] && awk '
             {
                 h=substr($0,1,64); p=substr($0,65); sub(/^[[:space:]]+/, "", p); sub(/^\*/, "", p)
-                if (h !~ /^[0-9a-fA-F]+$/ || length(h)!=64 || p !~ /^strategies\/nfqws2\/[A-Za-z0-9_.+ -]+\.conf$/ || p ~ /\.\./) bad++
+                if (h !~ /^[0-9a-fA-F]+$/ || length(h)!=64 || p !~ /^strategies\/nfqws2\/(additional\/)?[A-Za-z0-9_.+ -]+\.conf$/ || p ~ /\.\./) bad++
                 else ok++
             }
             END {exit(ok>0 && bad==0 ? 0 : 1)}
@@ -1558,6 +1658,7 @@ sync_strategies() {
     case "$_sync_checked:$_sync_now" in *[!0-9:]*|:*) _sync_checked= ;; esac
     if [ -n "$_sync_checked" ] && [ -n "$_sync_now" ] && [ "$_sync_now" -ge "$_sync_checked" ] &&
        [ $((_sync_now - _sync_checked)) -lt 3600 ] && _sync_valid_manifest "$_cached_manifest" &&
+       grep -qx 'catalog=2' "$_sync_stamp" &&
        _sync_valid_manifest "$_cached_upstream_manifest" && _sync_valid_xmenu_manifest "$_cached_xmenu_manifest"; then
         return 0
     fi
@@ -1622,7 +1723,7 @@ sync_strategies() {
         return 1
     fi
     mv -f "$_tmp/SHA256SUMS" "$_cached_manifest" || { rm -rf "$_tmp"; return 1; }
-    printf 'checked=%s\n' "$_sync_now" > "$_sync_stamp.tmp.$$" &&
+    printf 'checked=%s\ncatalog=2\n' "$_sync_now" > "$_sync_stamp.tmp.$$" &&
         mv -f "$_sync_stamp.tmp.$$" "$_sync_stamp" || { rm -rf "$_tmp"; return 1; }
     rm -rf "$_tmp"
     return 0
@@ -1647,17 +1748,24 @@ strategy_source_repo() {
     printf '%s\n' "$NF_REPO"
 }
 
+strategy_valid_name() {
+    case "$1" in *..*) return 1 ;; esac
+    printf '%s\n' "$1" | LC_ALL=C grep -Eq '^(additional/)?[A-Za-z0-9_.+ -]+\.conf$'
+}
+
 strategy_names_from_manifest() {
     _sn_ver=$1
     _sn_manifest="$ROOT_DIR/manifests/SHA256SUMS"
     [ -s "$_sn_manifest" ] || return 1
-    LC_ALL=C awk -v ver="$_sn_ver" '
+    LC_ALL=C awk -v ver="$_sn_ver" -v group="${2:-main}" '
         length(substr($0,1,64))==64 && substr($0,1,64) ~ /^[0-9a-fA-F]+$/ {
             rel=substr($0,65); sub(/^[[:space:]]+/, "", rel); sub(/^\*/, "", rel)
             prefix="strategies/nfqws" ver "/"
             if (index(rel,prefix)!=1) next
             name=substr(rel,length(prefix)+1)
-            if (name !~ /^[A-Za-z0-9_.+ -]+\.conf$/ || name ~ /\.\./) next
+            if (name !~ /^(additional\/)?[A-Za-z0-9_.+ -]+\.conf$/ || name ~ /\.\./) next
+            if (group == "additional" && index(name,"additional/") != 1) next
+            if (group != "additional" && index(name,"/") != 0) next
             print name
         }
     ' "$_sn_manifest" | LC_ALL=C sort -u
@@ -2115,10 +2223,10 @@ active_strategy_label() {
         printf '%s: %s' "$_asl_label" "$_asl_name"
         return 0
     fi
-    for _asl_file in "$CACHE_DIR/nfqws$_asl_ver"/*.conf; do
+    for _asl_file in "$CACHE_DIR/nfqws$_asl_ver"/*.conf "$CACHE_DIR/nfqws$_asl_ver"/additional/*.conf; do
         [ -s "$_asl_file" ] || continue
         if strategy_configs_equal "$_asl_conf" "$_asl_file"; then
-            _asl_name=${_asl_file##*/}
+            _asl_name=${_asl_file#"$CACHE_DIR/nfqws$_asl_ver/"}
             printf '%s: %s' "$_asl_label" "$_asl_name"
             return 0
         fi
@@ -2150,7 +2258,7 @@ strategy_menu_session() {
     _others="$ROOT_DIR/strategies-other.$$"
     _display="$ROOT_DIR/strategies-display.$$"
     _catalog="$ROOT_DIR/strategies-catalog.$$"
-    strategy_names_from_manifest "$_ver" > "$_catalog" || :
+    strategy_names_from_manifest "$_ver" "${XMENU_STRATEGY_GROUP:-main}" > "$_catalog" || :
     : > "$_list"
     # Сначала показываем самые используемые стратегии в привычном порядке.
     cat > "$_priority" <<'XMENU_STRATEGY_ORDER'
@@ -2200,46 +2308,54 @@ XMENU_STRATEGY_ORDER
 
     # Отмечаем выбранную стратегию по маркеру, затем по совпадению конфига.
     _current_strategy=$(sed -n '1{s/\r$//;p;}' "$ROOT_DIR/active-strategy-nfqws$_ver" 2>/dev/null)
-    case "$_current_strategy" in ''|*/*|*..*|*[!A-Za-z0-9_.+-]*) _current_strategy='' ;; esac
+    strategy_valid_name "$_current_strategy" || _current_strategy=''
     if [ -z "$_current_strategy" ] || [ ! -f "$_dir/$_current_strategy" ] ||
        ! strategy_configs_equal "$_conf" "$_dir/$_current_strategy"; then
         _current_strategy=''
-        for _candidate_file in "$_dir"/*.conf; do
+        for _candidate_file in "$_dir"/*.conf "$_dir"/additional/*.conf; do
             [ -s "$_candidate_file" ] || continue
             if strategy_configs_equal "$_conf" "$_candidate_file"; then
-                _current_strategy=${_candidate_file##*/}
+                _current_strategy=${_candidate_file#"$_dir/"}
                 break
             fi
         done
     fi
     : > "$_display"
     while IFS= read -r _display_name || [ -n "$_display_name" ]; do
-        _display_label=${_display_name%.conf}
+        _display_label=${_display_name#additional/}
+        _display_label=${_display_label%.conf}
         if [ "$_display_name" = "$_current_strategy" ]; then
             printf '%s\t%s\n' "$_display_label" '— Активная стратегия ⚡' >> "$_display"
         else
             printf '%s\t%s\n' "$_display_label" '' >> "$_display"
         fi
     done < "$_list"
-    _active_label=${_current_strategy%.conf}
-    line; say "${BRIGHT_CYAN}ВЫБОР СТРАТЕГИИ — nfqws$_ver:${RESET}"; line
+    _active_label=${_current_strategy#additional/}
+    _active_label=${_active_label%.conf}
+    line
+    if [ "${XMENU_STRATEGY_GROUP:-main}" = additional ]; then
+        say "${BRIGHT_CYAN}Дополнительные конфигурации — nfqws$_ver:${RESET}"
+    else
+        say "${BRIGHT_CYAN}ВЫБОР СТРАТЕГИИ — nfqws$_ver:${RESET}"
+    fi
+    line
     awk -F '\t' -v active="$_active_label" -v cyan="$BRIGHT_CYAN" -v reset="$RESET" '{
         if ($1 == active) printf "      %2d. %-28s %s— Активная стратегия ⚡%s\n", NR, $1, cyan, reset
         else printf "      %2d. %-28s %s\n", NR, $1, $2
     }' "$_display"
+    if [ "$_ver" = 2 ] && [ "${XMENU_STRATEGY_GROUP:-main}" = main ]; then
+        menu_item 99 'Дополнительные конфигурации'
+    fi
     menu_item 0 'Назад'
     line; _read_or_eof 'Номер стратегии: ' || { rm -f "$_display"; return 0; }; _n=$_read_value
     rm -f "$_display"
     case "$_n" in ''|0) return 0;; *[!0-9]*) say 'Неверный номер.'; return 1;; esac
+    if [ "$_n" = 99 ] && [ "$_ver" = 2 ] && [ "${XMENU_STRATEGY_GROUP:-main}" = main ]; then
+        (XMENU_STRATEGY_GROUP=additional; strategy_menu_session)
+        return $?
+    fi
     _name=$(awk -v n="$_n" 'NR==n {print; exit}' "$_list")
-    case "$_name" in
-        ''|.|*/*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\\'*)
-            say 'Недопустимое имя стратегии.'; return 1 ;;
-    esac
-    printf '%s\n' "$_name" | LC_ALL=C grep -Eq '^[A-Za-z0-9_.+ -]+$' || {
-        say 'Недопустимые символы в имени стратегии.'
-        return 1
-    }
+    strategy_valid_name "$_name" || { say 'Недопустимое имя стратегии.'; return 1; }
     _rel="strategies/nfqws$_ver/$_name"
     _url_rel=$(printf '%s' "$_rel" | sed 's/ /%20/g')
     _src="$(strategy_source_repo "$_rel")/$_url_rel"; _tmp="$ROOT_DIR/apply-$$.conf"
@@ -2376,14 +2492,7 @@ apply_marked_active_strategy() {
     _marker="$ROOT_DIR/active-strategy-nfqws$_ver"
     [ -s "$_marker" ] || return 0
     _name=$(sed -n '1p' "$_marker" | tr -d '\r')
-    case "$_name" in ''|.|..|*/*|*..*|*'?'*|*'#'*|*'%'*|*'['*|*']'*|*'\\'*)
-        say "${YELLOW}Имя активной стратегии в маркере некорректно; автоматическая замена пропущена.${RESET}"
-        return 0 ;;
-    esac
-    printf '%s\n' "$_name" | LC_ALL=C grep -Eq '^[A-Za-z0-9_.+ -]+$' || {
-        say "${YELLOW}Недопустимые символы в маркере активной стратегии; пропуск.${RESET}"
-        return 0
-    }
+    strategy_valid_name "$_name" || { say 'Имя активной стратегии некорректно; пропуск.'; return 0; }
     _rel="strategies/nfqws$_ver/$_name"
     _src="$CACHE_DIR/nfqws$_ver/$_name"
     [ -f "$_src" ] || { say "${YELLOW}Активная стратегия $_name отсутствует в кэше; пропуск.${RESET}"; return 0; }
@@ -2434,7 +2543,7 @@ sync_active_blobs() {
         if [ "$_pre_ver" != 0 ]; then
             _pre_marker="$ROOT_DIR/active-strategy-nfqws$_pre_ver"
             _pre_name=$(tr -d '\r' < "$_pre_marker" 2>/dev/null | sed -n '1p')
-            case "$_pre_name" in ''|.|..|*/*|*..*|*[!A-Za-z0-9_.+-]*) _pre_name='' ;; esac
+            strategy_valid_name "$_pre_name" || _pre_name=''
             if [ -n "$_pre_name" ] && [ -f "$CACHE_DIR/nfqws$_pre_ver/$_pre_name" ] &&
                strategy_configs_equal "$_pre_conf" "$CACHE_DIR/nfqws$_pre_ver/$_pre_name"; then
                 SYNC_ALLOW_STRATEGY_UPDATE=1
@@ -2545,7 +2654,453 @@ acquire_lock() {
     return 1
 }
 xmenu_site_check() (
+    if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import ssl' >/dev/null 2>&1; then
+        if [ "${XMENU_SITE_DIRECT:-0}" = 1 ]; then
+            say 'Прямой режим требует Python 3 с TLS: opkg install python3 python3-ssl'
+            return 2
+        fi
+        say 'Python 3 с TLS недоступен; используется базовая диагностика curl.'
+        xmenu_site_check_legacy "$@"
+        return $?
+    fi
+    _site_source=${XMENU_SITE_SOURCE:-$0}
+    [ -f "$_site_source" ] || _site_source=$(command -v "$_site_source" 2>/dev/null || :)
+    [ -f "$_site_source" ] || _site_source=/opt/bin/xmenu
+    _site_mode=normal
+    [ "${XMENU_SITE_DIRECT:-0}" != 1 ] || _site_mode=direct
+    python3 - "$_site_source" "$_site_mode" "${1:-}" <<'XMENU_SITE_ENGINE'
+import argparse
+import base64
+import errno
+import http.client
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import socket
+import ssl
+import subprocess
+import sys
+import threading
+import time
+import types
+import urllib.parse
+
+
+def load_engine(source, marker, name):
+    code = source.split("<<'" + marker + "'\n", 1)[1].split('\n' + marker, 1)[0]
+    module = types.ModuleType(name)
+    sys.modules[name] = module
+    exec(compile(code, '<' + name + '>', 'exec'), module.__dict__)
+    return module
+
+
+def parse_url(value):
+    value = value.strip()
+    if not value or len(value) > 4096 or any(ord(c) < 33 or ord(c) == 127 for c in value):
+        raise ValueError('Введите домен, IP или HTTP/HTTPS URL без пробелов.')
+    if '://' not in value:
+        try:
+            address = ipaddress.ip_address(value.strip('[]'))
+            value = '[' + str(address) + ']' if address.version == 6 else str(address)
+        except ValueError:
+            pass
+        value = 'https://' + value
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in ('http', 'https') or parsed.username is not None or parsed.password is not None or not parsed.hostname:
+        raise ValueError('Допустимы HTTP/HTTPS без учётных данных в URL.')
+    host = parsed.hostname.encode('idna').decode('ascii').lower()
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        if len(host) > 253 or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.')):
+            raise ValueError('Некорректное имя сайта.')
+    port = parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80)
+    if not 1 <= port <= 65535:
+        raise ValueError('Порт должен быть от 1 до 65535.')
+    authority = '[' + host + ']' if ':' in host else host
+    if port != (443 if parsed.scheme == 'https' else 80):
+        authority += ':' + str(port)
+    path = urllib.parse.quote(parsed.path or '/', safe="/%:@!$&'()*+,;=-._~")
+    query = urllib.parse.quote(parsed.query, safe="%/?@!$&'()*+,;=:-._~")
+    return urllib.parse.urlunsplit((parsed.scheme, authority, path, query, '')), host, port
+
+
+def resolve(host, transport):
+    try:
+        return [str(ipaddress.ip_address(host))], 0.0, None
+    except ValueError:
+        pass
+    started = time.monotonic()
+    program = 'import socket,json,sys,time; t=time.monotonic(); a=sorted({v[4][0] for v in socket.getaddrinfo(sys.argv[1],None,0,socket.SOCK_STREAM)}); print(json.dumps({"ips":a,"ms":(time.monotonic()-t)*1000}))'
+    try:
+        result = subprocess.run([sys.executable, '-c', program, host], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=transport.remaining(4))
+        if result.returncode:
+            return [], (time.monotonic() - started) * 1000, 'DNS не вернул адрес'
+        values = json.loads(result.stdout)
+        return [str(ipaddress.ip_address(v)) for v in values['ips']][:32], values['ms'], None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return [], (time.monotonic() - started) * 1000, 'DNS: ошибка или тайм-аут'
+
+
+def direct_path(ip, transport):
+    transport.public_target(ip)
+    path = transport.detect_path(ip)
+    transport.BYPASS_MARK = path['mark']
+    transport.inspect_route(ip, path)
+    if not path['direct_ready']:
+        reason = '; '.join(path.get('risks', []) + path.get('inspection_errors', []))
+        raise OSError(errno.ENOTSUP, 'Прямой WAN не подтверждён' + (': ' + reason if reason else ''))
+    return path
+
+
+def request(url, ip, transport, direct=False, accept='*/*', read_limit=16384):
+    normalized, host, port = parse_url(url)
+    parsed = urllib.parse.urlsplit(normalized)
+    data = {'url': normalized, 'ip': ip, 'tcp_ms': None, 'tls_ms': None, 'first_ms': None, 'body_ms': None, 'http': None, 'status': 'ERROR', 'stage': 'Маршрут'}
+    sock = guard = response = timer = None
+    timed_out = threading.Event()
+    try:
+        if direct:
+            data['path'] = direct_path(ip, transport)
+        data['stage'] = 'TCP'
+        sock, data['tcp_ms'], guard = transport.connect(ip, port, 3)
+        if direct and ipaddress.ip_address(sock.getsockname()[0]) != ipaddress.ip_address(data['path']['source']):
+            raise OSError(errno.ENOTSUP, 'Исходный адрес не совпал с подтверждённым WAN-маршрутом')
+        deadline = min(transport.END_TIME, time.monotonic() + 7)
+        def timeout():
+            timed_out.set()
+            if sock:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        timer = threading.Timer(max(.001, deadline - time.monotonic()), timeout)
+        timer.daemon = True
+        timer.start()
+        sock.settimeout(transport.remaining(3))
+        if parsed.scheme == 'https':
+            data['stage'] = 'TLS'
+            context = ssl.create_default_context()
+            started = time.monotonic()
+            sock = context.wrap_socket(sock, server_hostname=host)
+            with transport.SOCKET_LOCK:
+                transport.ACTIVE_SOCKETS.add(sock)
+            data['tls_ms'] = (time.monotonic() - started) * 1000
+            data['tls_version'] = sock.version()
+            certificate = sock.getpeercert()
+            data['cert_expires'] = certificate.get('notAfter')
+        data['stage'] = 'HTTP'
+        target = urllib.parse.urlunsplit(('', '', parsed.path or '/', parsed.query, ''))
+        headers = 'GET ' + target + ' HTTP/1.1\r\nHost: ' + parsed.netloc + '\r\nUser-Agent: Xmenu/1.4.4\r\nAccept: ' + accept + '\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n'
+        sock.settimeout(transport.remaining(min(3, max(.001, deadline - time.monotonic()))))
+        started = time.monotonic()
+        sock.sendall(headers.encode('ascii'))
+        response = http.client.HTTPResponse(sock, method='GET')
+        if not response.fp.peek(1):
+            raise http.client.RemoteDisconnected('Сервер закрыл соединение без HTTP-ответа')
+        data['first_ms'] = (time.monotonic() - started) * 1000
+        response.begin()
+        if timed_out.is_set() or transport.CANCEL.is_set():
+            raise TimeoutError('Ожидание HTTP-заголовков прервано по лимиту')
+        data['http'] = response.status
+        data['location'] = response.getheader('Location')
+        data['content_type'] = response.getheader('Content-Type', '')[:120]
+        data['status'] = 'HTTP'
+        if response.status in (301, 302, 303, 307, 308):
+            return data
+        data['stage'] = 'Чтение'
+        started = time.monotonic()
+        try:
+            body = response.read(read_limit + 1)
+            data['body_ms'] = (time.monotonic() - started) * 1000
+            data['bytes'] = min(len(body), read_limit)
+            data['limited'] = len(body) > read_limit
+            data['body'] = body[:read_limit]
+            if timed_out.is_set() or transport.CANCEL.is_set():
+                data.update(status='BODY ERROR', error='Чтение ответа прервано по лимиту времени')
+            elif not data['limited'] and response.length is not None and response.length > 0:
+                data.update(status='BODY ERROR', error='Сервер закрыл ответ раньше объявленного Content-Length')
+            else:
+                data['status'] = 'OK'
+        except (OSError, http.client.HTTPException) as exc:
+            data['status'] = 'BODY ERROR'
+            data['error'] = transport.clean(str(exc))
+        return data
+    except ssl.SSLCertVerificationError as exc:
+        data.update(status='CERT ERROR', error=transport.clean(exc.verify_message))
+    except ssl.SSLError as exc:
+        data.update(status='TLS ERROR', error=transport.clean(str(exc)))
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        code = getattr(exc, 'errno', None)
+        status = 'TIMEOUT' if isinstance(exc, TimeoutError) else 'RESET' if code == errno.ECONNRESET else 'REFUSED' if code == errno.ECONNREFUSED else 'NO ROUTE' if code in (errno.ENETUNREACH, errno.EHOSTUNREACH) else 'CANCELLED' if code == errno.ECANCELED else 'ERROR'
+        data.update(status=status, error=transport.clean(str(exc)))
+    finally:
+        if timer:
+            timer.cancel()
+        if response:
+            response.close()
+        if sock:
+            sock.close()
+        if guard:
+            guard.close()
+    return data
+
+
+def reference_dns(host, transport, dns, direct, qtype=1):
+    packet = dns.query(host, qtype)
+    value = base64.urlsafe_b64encode(packet).rstrip(b'=').decode('ascii')
+    for endpoint, ip in (('cloudflare-dns.com', '1.1.1.1'), ('dns.google', '8.8.8.8')):
+        result = request('https://' + endpoint + '/dns-query?dns=' + value, ip, transport, direct, 'application/dns-message', 65535)
+        if result['status'] != 'OK' or result.get('http') != 200:
+            continue
+        try:
+            answer = dns.parse(result['body'], packet)
+            if answer['tc'] or answer['rcode'] not in (0, 3):
+                continue
+            return answer['ips'], 'DoH: NXDOMAIN' if answer['rcode'] == 3 else 'DoH: адрес получен' if answer['ips'] else 'DoH: записей этой версии IP нет'
+        except ValueError:
+            continue
+    return [], 'Контрольный DoH недоступен или вернул некорректный ответ'
+
+
+def friendly_result(item):
+    code, status = item.get('http'), item['status']
+    if status == 'BODY ERROR':
+        return 'Загрузка прервалась', '31;1'
+    if code:
+        if 200 <= code < 300:
+            return 'Открывается', '32;1'
+        if code in (301, 302, 303, 307, 308):
+            return 'Переход на другую страницу', '33'
+        if code in (401, 403):
+            return 'Доступ ограничен сайтом', '33'
+        if code in (404, 410):
+            return 'Страница не найдена', '33'
+        if code == 429:
+            return 'Сайт просит повторить позже', '33'
+        return 'Ошибка на стороне сайта' if code >= 500 else 'Необычный ответ сайта', '31;1'
+    if item['stage'] == 'Маршрут':
+        return 'Прямой путь не подтверждён', '33'
+    if status == 'CERT ERROR':
+        return 'Ошибка сертификата сайта', '31;1'
+    if status == 'NO ROUTE':
+        return 'Нет маршрута к адресу', '33'
+    if item['stage'] == 'TLS':
+        return 'Не удалось защитить соединение', '31;1'
+    return {'TIMEOUT': 'Сайт не отвечает', 'RESET': 'Соединение сброшено', 'REFUSED': 'Соединение отклонено', 'CANCELLED': 'Не хватило времени'}.get(status, 'Ответ не получен'), '31;1'
+
+
+def show_rows(rows, transport):
+    columns = max(74, min(120, shutil.get_terminal_size((110, 24)).columns))
+    values = []
+    last_step = None
+    for item in rows:
+        step = item.get('step', '')
+        if step != last_step:
+            values.append(([step, '', '', '', ''] if columns >= 100 else [step, '', '', ''], ['36;1'] * (5 if columns >= 100 else 4)))
+            last_step = step
+        outcome, color = friendly_result(item)
+        timing = lambda key: ('<0.1 мс' if item[key] < .1 else f"{item[key]:.1f} мс") if item.get(key) is not None else None
+        dns_value = 'IP задан' if item.get('literal') else f"{item.get('dns_ms', 0):.0f} мс"
+        tcp_value = timing('tcp_ms') or ('Не провер.' if item['stage'] == 'Маршрут' else 'Нет пути' if item['status'] == 'NO ROUTE' else 'Отказ' if item['status'] == 'REFUSED' else 'Нет ответа')
+        tls_value = timing('tls_ms') or ('Не нужен' if item['url'].startswith('http:') else 'Серт. неверен' if item['status'] == 'CERT ERROR' else 'Нет ответа' if item['stage'] == 'TLS' else 'Не проверен')
+        if item.get('tls_ms') is not None and item.get('tls_version'):
+            tls_value = item['tls_version'].replace('TLSv', 'TLS') + f" {item['tls_ms']:.1f} мс"
+        http_value = ('HTTP ' + str(item['http']) + (' · обрыв' if item['status'] == 'BODY ERROR' else (f" · {item['first_ms']:.0f} мс" if item.get('first_ms') is not None else ''))) if item.get('http') else 'Нет ответа' if item['stage'] == 'HTTP' else 'Не проверен'
+        if item.get('stage') == 'Маршрут':
+            http_value = 'Обход не подтверждён'
+        tcp_color = '32' if item.get('tcp_ms') is not None else '33' if item['stage'] == 'Маршрут' else '31;1'
+        tls_color = '32' if item.get('tls_ms') is not None else '90' if tls_value in ('Не нужен', 'Не проверен') else '31;1'
+        if columns >= 100:
+            values.append(([item['ip'], dns_value, tcp_value, tls_value, http_value], ['36', '37', tcp_color, tls_color, color]))
+        else:
+            values.append(([item['ip'], dns_value, tcp_value + ' / ' + tls_value, http_value], ['36', '37', color, color]))
+    if columns >= 100:
+        address_width = min(39, columns - 71)
+        transport.table(['Сайт / IP', 'DNS', 'TCP', 'TLS', 'HTTP / ответ'], values, [address_width, 7, 10, 15, columns - address_width - 48], compact=True)
+    else:
+        address_width = max(20, columns - 54)
+        transport.table(['Сайт / IP', 'DNS', 'TCP / TLS', 'HTTP / ответ'], values, [address_width, 7, 18, columns - address_width - 38], compact=True)
+
+
+def diagnose(value, transport, dns, direct=False):
+    original, host, port = parse_url(value)
+    transport.CANCEL.clear()
+    transport.END_TIME = time.monotonic() + 50
+    started = time.monotonic()
+    watchdog = threading.Timer(50, transport.stop_probes)
+    watchdog.daemon = True
+    watchdog.start()
+    all_rows, chain, visited = [], [], set()
+    current = original
+    final = None
+    dns_fallback = False
+    issue = None
+    print('\n' + transport.paint('Проверка сайта: ' + host))
+    print('Подключение: ' + transport.paint('напрямую, в обход XKeen/nfqws2' if direct else 'через текущие настройки роутера', '33' if direct else '36'))
+    try:
+        for hop in range(6):
+            current, name, current_port = parse_url(current)
+            if current in visited:
+                issue = 'Цикл перенаправлений: сайт возвращает на уже проверенный URL.'
+                break
+            visited.add(current)
+            try:
+                ipaddress.ip_address(name)
+                literal = True
+            except ValueError:
+                literal = False
+            if direct and not literal:
+                lookup_started = time.monotonic()
+                addresses, note = reference_dns(name, transport, dns, True, 1)
+                ipv6, note6 = reference_dns(name, transport, dns, True, 28)
+                addresses += ipv6
+                lookup_ms = (time.monotonic() - lookup_started) * 1000
+                lookup_error = None if addresses else note + '; ' + note6
+            else:
+                addresses, lookup_ms, lookup_error = resolve(name, transport)
+            if lookup_error:
+                if direct:
+                    issue = 'Не удалось получить адрес сайта через прямое подключение.'
+                    break
+                ips, note = reference_dns(name, transport, dns, direct, 1)
+                ipv6, note6 = reference_dns(name, transport, dns, direct, 28)
+                ips += ipv6
+                if not ips:
+                    issue = 'Не удалось найти адрес сайта. Проверьте домен и настройки DNS.'
+                    break
+                addresses = ips
+                dns_fallback = True
+            selected = []
+            try:
+                versions = (ipaddress.ip_address(name).version,)
+            except ValueError:
+                versions = (4, 6)
+            for version in versions:
+                choices = [ip for ip in addresses if ipaddress.ip_address(ip).version == version][:2]
+                selected += choices
+            results = []
+            for ip in selected:
+                item = request(current, ip, transport, direct)
+                item.update(step=str(hop + 1) + '. ' + name, dns_ms=lookup_ms, literal=literal)
+                results.append(item)
+                if transport.CANCEL.is_set():
+                    break
+            all_rows.extend(results)
+            good = [item for item in results if item.get('http')]
+            if not good:
+                issue = None
+                if results and all(item['stage'] == 'Маршрут' for item in results):
+                    issue = 'Проверка напрямую не выполнена: маршрут через WAN не подтверждён.'
+                elif any(item['status'] == 'CERT ERROR' for item in results):
+                    issue = 'Не удалось проверить сертификат сайта. Проверьте дату роутера.'
+                elif any(item['stage'] == 'TLS' for item in results):
+                    issue = 'TCP-соединение установлено, но TLS не завершён.'
+                elif any(item['stage'] == 'HTTP' for item in results):
+                    issue = 'Соединение установлено, но HTTP-ответ от сайта не получен.'
+                else:
+                    issue = 'Сайт не ответил на подключение с роутера.'
+                break
+            priority = lambda item: 0 if item['status'] == 'OK' and 200 <= item['http'] < 300 else 1 if item['http'] in (301, 302, 303, 307, 308) and item.get('location') else 2 if item['status'] == 'OK' else 3
+            final = min(good, key=priority)
+            if final['http'] not in (301, 302, 303, 307, 308):
+                break
+            location = final.get('location')
+            if not location:
+                issue = 'Сайт перенаправляет запрос, но не сообщает адрес новой страницы.'
+                break
+            try:
+                next_url, _, _ = parse_url(urllib.parse.urljoin(current, location))
+            except ValueError as exc:
+                issue = 'Недопустимое перенаправление: ' + str(exc)
+                break
+            chain.append((final['http'], next_url))
+            if current.startswith('https:') and next_url.startswith('http:'):
+                print(transport.paint('Переход HTTPS → HTTP: следующий участок без шифрования.', '33'))
+            if hop == 5:
+                issue = 'Лимит: 5 переходов. Конечная страница не проверена.'
+                break
+            current = next_url
+    finally:
+        watchdog.cancel()
+        transport.cleanup_flows()
+    if all_rows:
+        print()
+        show_rows(all_rows, transport)
+    print()
+    confirmation = ' → '.join('HTTP ' + str(code) for code in [entry[0] for entry in chain] + ([final['http']] if final and not issue else []))
+    if issue:
+        not_checked = issue.startswith('Проверка напрямую не выполнена') or (direct and not all_rows)
+        print(transport.paint('Проверка не выполнена' if not_checked else 'Сайт не открывается', '33;1' if not_checked else '31;1'))
+        print(issue)
+    elif final and final['status'] == 'OK' and 200 <= final['http'] < 300:
+        if dns_fallback:
+            print(transport.paint('Сайт открывается через резервный DNS — ' + confirmation, '33;1'))
+            print('Проверьте обычный DNS роутера: он не смог найти адрес сайта.')
+        else:
+            print(transport.paint('Сайт открывается' + (' напрямую' if direct else '') + ' — ' + confirmation, '32;1'))
+    elif final:
+        code = final['http']
+        detail = 'Требуется вход или сервер ограничил доступ.' if code in (401, 403) else 'Страница не найдена.' if code in (404, 410) else 'Сервер ограничил частоту запросов.' if code == 429 else 'Ошибка сервера.' if code >= 500 else 'Ответ получен, но успешная загрузка не подтверждена.'
+        print(transport.paint(('Сайт доступен, страница не найдена' if code in (404, 410) else 'Сайт не открывается') + ' — ' + confirmation, '33;1' if code in (404, 410) else '31;1'))
+        print('Загрузка ответа прервалась.' if final['status'] == 'BODY ERROR' else detail)
+    failures = [item for item in all_rows if item.get('http') is None]
+    if failures and not issue and final and final['status'] == 'OK' and 200 <= final['http'] < 300:
+        print(transport.paint('Один из адресов сайта недоступен, другой отвечает.', '33'))
+    if transport.CANCEL.is_set():
+        print(transport.paint('Время проверки истекло; часть адресов не проверена.', '33'))
+    if transport.FLOW_RULES:
+        print(transport.paint('Внимание: не все временные исключения удалены.', '31;1'))
+    if not direct and any(item.get('tcp_ms') is not None and item['tcp_ms'] < 1 for item in all_rows):
+        print('TCP — время подключения, не ping. Через локальный прокси оно может быть меньше 1 мс.')
+    print(transport.paint(f'Проверка заняла {time.monotonic() - started:.1f} с.', '90'))
+    return 0 if not issue and not dns_fallback and not transport.CANCEL.is_set() and not transport.FLOW_RULES and final and final['status'] == 'OK' and 200 <= final['http'] < 300 else 1
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('source')
+    parser.add_argument('mode', choices=('normal', 'direct'))
+    parser.add_argument('target')
+    args = parser.parse_args()
+    source = Path(args.source).read_text(encoding='utf-8')
+    transport = load_engine(source, 'XMENU_SERVER_ENGINE', 'xmenu_site_transport')
+    dns = load_engine(source, 'XMENU_DNS_ENGINE', 'xmenu_site_dns')
+    def cancel(signum, frame):
+        transport.stop_probes()
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGINT, cancel)
+    signal.signal(signal.SIGTERM, cancel)
+    try:
+        return diagnose(args.target, transport, dns, args.mode == 'direct')
+    finally:
+        transport.cleanup_flows()
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print('\nПроверка отменена.')
+        sys.exit(130)
+    except (OSError, ValueError, IndexError) as exc:
+        print('Ошибка: ' + str(exc), file=sys.stderr)
+        sys.exit(2)
+
+XMENU_SITE_ENGINE
+)
+
+
+xmenu_site_check_legacy() (
     _site_input=${1:-}
+    case "$_site_input" in
+        *[!0-9A-Fa-f:]*|'') : ;;
+        *:*:*) _site_input="[$_site_input]" ;;
+    esac
     case "$_site_input" in
         http://*|https://*) _site_url=$_site_input ;;
         *://*) say 'Допустимы только http:// и https://'; return 2 ;;
@@ -2668,25 +3223,3216 @@ xmenu_site_check() (
             printf "\n"
         }'
     [ "$_site_rc" != 28 ] || say 'Достигнут лимит ожидания. Сам по себе тайм-аут не доказывает блокировку.'
+    case "$_site_host" in *:*) say 'Проверяется указанный IPv6-адрес. Для соединения нужен рабочий IPv6-маршрут.' ;; esac
     say 'Проверка идёт с роутера. Работа браузера и загрузка всей страницы могут отличаться.'
     return "$_site_result"
 )
+
+xmenu_site_batch() (
+    if [ "$#" -lt 1 ] || [ "$#" -gt 5 ]; then
+        say 'Введите от 1 до 5 доменов или URL.'; return 2
+    fi
+    _batch_total=$#; _batch_index=0; _batch_failed=0
+    for _batch_target do
+        _batch_index=$((_batch_index + 1))
+        [ "$_batch_total" -le 1 ] || say "${CYAN}Сайт $_batch_index из $_batch_total${RESET}"
+        _site_failed=0
+        if [ "${XMENU_SITE_DIRECT:-0}" = 1 ]; then
+            xmenu_site_check "$_batch_target" || _site_failed=1
+        else
+            say "${CYAN}Тест 1/2 — обычное подключение${RESET}"
+            (XMENU_SITE_DIRECT=0; xmenu_site_check "$_batch_target") || _site_failed=1
+            say ''
+            say "${CYAN}Тест 2/2 — принудительно напрямую${RESET}"
+            (XMENU_SITE_DIRECT=1; xmenu_site_check "$_batch_target") || _site_failed=1
+        fi
+        [ "$_site_failed" = 0 ] || _batch_failed=$((_batch_failed + 1))
+        say ''
+    done
+    if [ "$_batch_total" -gt 1 ]; then
+        line
+        say "Без замечаний: $((_batch_total - _batch_failed)) из $_batch_total. Требуют внимания: $_batch_failed."
+    fi
+    [ "$_batch_failed" = 0 ]
+)
+
+xmenu_site_input_batch() (
+    _batch_input=$1
+    set -f
+    _batch_input=$(printf '%s' "$_batch_input" | tr ',' ' ')
+    # shellcheck disable=SC2086
+    set -- $_batch_input
+    xmenu_site_batch "$@"
+)
+
+xmenu_dns_diagnose() {
+    command -v python3 >/dev/null 2>&1 || {
+        say 'Нужен Python 3 с TLS: opkg install python3 python3-ssl'
+        return 2
+    }
+    command -v curl >/dev/null 2>&1 || { say 'Нужен curl: opkg install curl ca-bundle'; return 2; }
+    python3 - "$@" <<'XMENU_DNS_ENGINE'
+import argparse
+import base64
+import concurrent.futures
+import ctypes
+import errno
+import ipaddress
+import json
+import os
+import random
+import secrets
+import shutil
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import time
+import threading
+import unicodedata
+import urllib.parse
+from dataclasses import dataclass, replace
+
+
+PRESETS = '''Google|8.8.4.4|dns.google|https://dns.google/dns-query|1
+Google #2|8.8.8.8|8.8.8.8||1
+Google #3||8.8.4.4||0
+Cloudflare|||https://cloudflare-dns.com/dns-query|0
+Cloudflare IP|1.1.1.1|1.1.1.1|https://1.1.1.1/dns-query|1
+Cloudflare IP 2|1.0.0.1|1.0.0.1|https://1.0.0.1/dns-query|1
+Quad9|9.9.9.9|dns.quad9.net|https://dns.quad9.net/dns-query|1
+Quad9 #2|149.112.112.112|||1
+AdGuard|94.140.14.14|dns.adguard-dns.com|https://dns.adguard-dns.com/dns-query|1
+AdGuard #2|94.140.15.15|||1
+НСДИ|195.208.4.1|||1
+НСДИ #2|195.208.5.1|||1
+AdGuard (F)|94.140.14.15|family.adguard-dns.com|https://family.adguard-dns.com/dns-query|1
+AdGuard (L)||dns.adguard.com|https://dns.adguard.com/dns-query|0
+AdGuard (UN)|94.140.14.140|unfiltered.adguard-dns.com|https://unfiltered.adguard-dns.com/dns-query|1
+Alibaba|223.5.5.5|dns.alidns.com|https://dns.alidns.com/dns-query|1
+Alibaba #2|223.6.6.6|||1
+CleanBrowsing|185.228.168.9|security-filter-dns.cleanbrowsing.org|https://doh.cleanbrowsing.org/doh/security-filter|1
+CleanBrowsing #2|185.228.169.9|||1
+Cloudflare (M)|||https://mozilla.cloudflare-dns.com/dns-query|0
+Cloudflare (S)||security.cloudflare-dns.com|https://security.cloudflare-dns.com/dns-query|0
+Cloudflare dns|||https://dns.cloudflare.com/dns-query|0
+Cloudflare dot||1dot1dot1dot1.cloudflare-dns.com|https://1dot1dot1dot1.cloudflare-dns.com/dns-query|0
+Cloudflare one||one.one.one.one|https://one.one.one.one/dns-query|0
+Comodo|8.26.56.26|||1
+Comodo 2|8.20.247.20|||1
+Comss.one|83.220.169.155|dns.comss.one|https://dns.comss.one/dns-query|1
+Comss.one #2|212.109.195.93||https://doh.comss.one/dns-query|1
+ControlD|76.76.2.11|freedns.controld.com|https://freedns.controld.com/p0|1
+ControlD #2|76.76.10.11|||1
+DNS Watch|84.200.69.80|||1
+DNS Watch 2|84.200.70.40|||1
+DNS.SB|185.222.222.222|dot.sb|https://dns.sb/dns-query|1
+DNS.SB #2|45.11.45.11|||1
+DNS4all|194.0.5.3|dot.dns4all.eu|https://doh.dns4all.eu/dns-query|1
+dnsforge|176.9.93.198|dnsforge.de|https://dnsforge.de/dns-query|1
+First Colo|212.224.71.71|||1
+First Colo #2|79.133.62.62|||1
+Geohide|45.155.204.190|dns.geohide.ru|https://dns.geohide.ru:444/dns-query|1
+Gesellschaft||dns.digitale-gesellschaft.ch|https://dns.digitale-gesellschaft.ch/dns-query|0
+Level 3|209.244.0.3|||1
+Level 3 #2|209.244.0.4|||1
+Level 3 #3|4.2.2.1|||1
+Level 3 #4|4.2.2.2|||1
+LibreDNS||dot.libredns.gr|https://doh.libredns.gr/dns-query|0
+MSK-IX|62.76.62.76|||1
+MSK-IX #2|62.76.76.62|||1
+Mullvad||dns.mullvad.net|https://dns.mullvad.net/dns-query|0
+NextDNS|45.90.28.0|dns.nextdns.io|https://dns.nextdns.io/dns-query|1
+NextDNS #2|45.90.30.0|||1
+OpenDNS|208.67.220.220|dns.opendns.com|https://doh.opendns.com/dns-query|1
+OpenDNS #2|208.67.222.222||https://dns.opendns.com/dns-query|1
+Quad9 (S)|9.9.9.11|dns11.quad9.net|https://dns11.quad9.net/dns-query|1
+Quad9 (UN)|9.9.9.10|dns10.quad9.net|https://dns10.quad9.net/dns-query|1
+Quad9 (UN2)|9.9.9.12|dns12.quad9.net|https://dns12.quad9.net/dns-query|1
+UncensoredDNS||unicast.censurfridns.dk|https://anycast.uncensoreddns.org/dns-query|0
+Wikimedia||wikimedia-dns.org|https://wikimedia-dns.org/dns-query|0
+XboxDNS (RU)|111.88.96.55|xbox-dns.ru|https://xbox-dns.ru/dns-query|1
+Yandex|77.88.8.1|common.dot.dns.yandex.net|https://common.dot.dns.yandex.net/dns-query|1
+Yandex #2|77.88.8.8|||1
+Yandex (Safe 2)|77.88.8.2|||1
+Yandex (Safe)|77.88.8.88|safe.dot.dns.yandex.net|https://safe.dot.dns.yandex.net/dns-query|1'''
+
+
+@dataclass
+class Server:
+    name: str
+    ip: str
+    dot: str = ''
+    doh: str = ''
+    port: int = 53
+    dot_port: int = 853
+    udp: bool = True
+
+
+SERVERS = [Server(*line.split('|')[:4], udp=line.split('|')[4] == '1') for line in PRESETS.splitlines()]
+BOOTSTRAP = [Server('Google reference', '8.8.8.8', 'dns.google', 'https://dns.google/dns-query'), Server('Cloudflare reference', '1.1.1.1', 'cloudflare-dns.com', 'https://cloudflare-dns.com/dns-query')]
+DEFAULT_DOMAINS = ['rutor.info', 'flibusta.is', 'clubtone.do.am', 'rezka.ag', 'shikimori.one']
+ALLOWED_DOMAINS = ['vk.ru', 'gosuslugi.ru']
+KNOWN_RESOLVERS = ('google', 'cloudflarenet', 'i3dnet', 'cdn77', 'alibaba-cn-net', 'as-vultr', 'cdnext', 'xtom', 'tencent-net-ap-cn', 'misaka-cis-as', 'as-anexia', 'ru-jsciot', 'yandex', 'cisco', 'woodynet', 'e1-emea', 'gtt-backbone', 'level3', 'firstcolo', 'cloudflare', 'quad9', 'adguard', 'opendns', 'cleanbrowsing', 'nextdns', 'controld', 'mullvad', 'dns0', 'ahadns', 'comss', 'geohide')
+COLOR = sys.stdout.isatty() and os.environ.get('TERM') != 'dumb'
+
+
+def paint(text, color='36;1'):
+    return '\033[' + color + 'm' + str(text) + '\033[0m' if COLOR else str(text)
+
+
+def title(text):
+    print('\n' + paint(text), flush=True)
+
+
+def progress(text):
+    if sys.stdout.isatty():
+        print('\r\033[2K' + text, end='', flush=True)
+
+
+def domain(text):
+    value = text.strip().rstrip('.').encode('idna').decode('ascii').lower()
+    if not value or len(value) > 253:
+        raise ValueError('Некорректный домен')
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        raise ValueError('Здесь нужен домен для DNS-запроса, IP сервера выбирается отдельно')
+    for label in value.split('.'):
+        if not label or len(label) > 63 or label.startswith('-') or label.endswith('-'):
+            raise ValueError('Некорректный домен')
+        if any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in label):
+            raise ValueError('Некорректный домен')
+    return value
+
+
+def query(name, qtype=1):
+    ident = secrets.randbelow(65536)
+    qname = b''.join(bytes([len(p)]) + p.encode('ascii') for p in domain(name).split('.')) + b'\0'
+    return struct.pack('!HHHHHH', ident, 0x0100, 1, 0, 0, 0) + qname + struct.pack('!HH', qtype, 1)
+
+
+def read_name(data, offset):
+    labels = []
+    end = None
+    seen = set()
+    for _ in range(128):
+        if offset >= len(data) or offset in seen:
+            raise ValueError('Некорректное DNS-имя')
+        seen.add(offset)
+        n = data[offset]
+        if n & 0xc0 == 0xc0:
+            if offset + 1 >= len(data):
+                raise ValueError('Обрезанный DNS-ответ')
+            if end is None:
+                end = offset + 2
+            offset = ((n & 63) << 8) | data[offset + 1]
+            continue
+        if n > 63 or offset + 1 + n > len(data):
+            raise ValueError('Обрезанный DNS-ответ')
+        offset += 1
+        if n == 0:
+            return '.'.join(labels).lower(), end if end is not None else offset
+        labels.append(data[offset:offset + n].decode('ascii'))
+        offset += n
+    raise ValueError('Слишком длинное DNS-имя')
+
+
+def parse(data, request):
+    if len(data) < 12 or len(data) > 65535:
+        raise ValueError('Некорректная длина DNS-ответа')
+    ident, flags, qd, an, ns, ar = struct.unpack('!6H', data[:12])
+    expected_id = struct.unpack('!H', request[:2])[0]
+    if ident != expected_id or not flags & 0x8000 or (flags >> 11) & 15 or qd != 1:
+        raise ValueError('Ответ не соответствует запросу')
+    qname, offset = read_name(data, 12)
+    original, original_end = read_name(request, 12)
+    if offset + 4 > len(data) or qname != original or data[offset:offset + 4] != request[original_end:original_end + 4]:
+        raise ValueError('В ответе изменён DNS-вопрос')
+    qtype = struct.unpack('!H', data[offset:offset + 2])[0]
+    offset += 4
+    records = []
+    for index in range(an + ns + ar):
+        owner, offset = read_name(data, offset)
+        if offset + 10 > len(data):
+            raise ValueError('Обрезанная DNS-запись')
+        rtype, rclass, ttl, size = struct.unpack('!HHIH', data[offset:offset + 10])
+        offset += 10
+        if offset + size > len(data):
+            raise ValueError('Обрезанные DNS-данные')
+        value = data[offset:offset + size]
+        if index < an and rclass == 1:
+            if rtype in (1, 28) and size == (4 if rtype == 1 else 16):
+                records.append((owner, rtype, str(ipaddress.ip_address(value))))
+            elif rtype == 5:
+                target, _ = read_name(data, offset)
+                records.append((owner, rtype, target))
+            elif rtype == 16:
+                pieces = []
+                pos = 0
+                while pos < len(value):
+                    length = value[pos]
+                    pos += 1
+                    if pos + length > len(value):
+                        raise ValueError('Обрезанная TXT-запись')
+                    pieces.append(value[pos:pos + length].decode('ascii', 'replace'))
+                    pos += length
+                records.append((owner, rtype, ''.join(pieces)))
+        offset += size
+    owners = {qname}
+    for _ in range(16):
+        extra = {v for o, t, v in records if o in owners and t == 5}
+        if extra.issubset(owners):
+            break
+        owners.update(extra)
+    ips = {v for o, t, v in records if o in owners and t == qtype and t in (1, 28)}
+    texts = [v for o, t, v in records if o in owners and t == 16]
+    return {'ips': sorted(ips), 'txt': texts, 'rcode': flags & 15, 'ad': bool(flags & 0x20), 'tc': bool(flags & 0x200)}
+
+
+class ProbeError(Exception):
+    pass
+
+
+def failure(label):
+    return {'ips': [], 'txt': [], 'rcode': None, 'ms': None, 'error': label, 'tc': False, 'ad': False}
+
+
+def tls_error(exc, stage):
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return {'connect': 'SYN DROP', 'handshake': 'TLS DROP'}.get(stage, 'TIMEOUT')
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return 'NO CA BUNDLE' if getattr(exc, 'verify_code', None) in (2, 18, 19, 20, 21) else 'TLS ERR'
+    if isinstance(exc, ConnectionRefusedError):
+        return 'REFUSED'
+    if isinstance(exc, ConnectionAbortedError):
+        return 'TLS ABORT' if stage != 'connect' else 'TCP ABORT'
+    if isinstance(exc, ConnectionResetError):
+        return 'TLS RST' if stage != 'connect' else 'TCP RST'
+    if isinstance(exc, ssl.SSLEOFError) or 'eof' in str(exc).lower():
+        return 'TLS RST' if stage == 'handshake' else 'TLS EOF'
+    message = str(exc).lower()
+    if 'wrong version number' in message:
+        return 'TLS SPOOF'
+    if 'protocol_version' in message or 'protocol version' in message:
+        return 'TLS BLOCK'
+    if 'alert' in str(exc).lower():
+        return 'TLS ALERT'
+    if getattr(exc, 'errno', None) in (errno.ENETUNREACH, errno.ENETDOWN):
+        return 'NET UNREACH'
+    if getattr(exc, 'errno', None) in (errno.EHOSTUNREACH, errno.EHOSTDOWN):
+        return 'HOST UNREACH'
+    return 'TLS ERR' if isinstance(exc, ssl.SSLError) else 'OS ERR'
+
+
+_curl = None
+_curl_lock = threading.Lock()
+
+
+def curl_library():
+    global _curl
+    with _curl_lock:
+        if _curl is not None:
+            return _curl
+        library = ctypes.CDLL('/opt/lib/libcurl.so.4')
+        library.curl_global_init.argtypes = [ctypes.c_long]
+        library.curl_global_init.restype = ctypes.c_int
+        if library.curl_global_init(3):
+            raise ProbeError('CURL INIT')
+        library.curl_easy_init.restype = ctypes.c_void_p
+        library.curl_easy_setopt.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        library.curl_easy_setopt.restype = ctypes.c_int
+        library.curl_easy_getinfo.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        library.curl_easy_getinfo.restype = ctypes.c_int
+        library.curl_easy_perform.argtypes = [ctypes.c_void_p]
+        library.curl_easy_perform.restype = ctypes.c_int
+        library.curl_easy_cleanup.argtypes = [ctypes.c_void_p]
+        library.curl_slist_append.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        library.curl_slist_append.restype = ctypes.c_void_p
+        library.curl_slist_free_all.argtypes = [ctypes.c_void_p]
+        _curl = library
+        return library
+
+
+class DohSession:
+    def __init__(self, server, timeout):
+        self.lib = curl_library()
+        self.handle = self.lib.curl_easy_init()
+        self.headers = None
+        self.resolve = None
+        self.body = bytearray()
+        self.error = ctypes.create_string_buffer(256)
+        self.timeout = timeout
+        self.connected = False
+        self.closed = False
+        self.url = server.doh
+        if not self.handle:
+            raise ProbeError('CURL INIT')
+        self.callback = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p)(self.receive)
+        try:
+            url = urllib.parse.urlsplit(server.doh)
+            address = '[' + server.ip + ']' if ':' in server.ip else server.ip
+            self.resolve = self.lib.curl_slist_append(None, f'{url.hostname}:{url.port or 443}:{address}'.encode())
+            for header in (b'Content-Type: application/dns-message', b'Accept: application/dns-message'):
+                self.headers = self.lib.curl_slist_append(self.headers, header)
+            self.set(10002, ctypes.c_char_p(server.doh.encode()))
+            self.set(10010, self.error)
+            self.set(20011, self.callback)
+            self.set(10023, ctypes.c_void_p(self.headers))
+            self.set(10203, ctypes.c_void_p(self.resolve))
+            self.set(10177, ctypes.c_char_p(b'*'))
+            self.set(10018, ctypes.c_char_p(b'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'))
+            self.set(10318, ctypes.c_char_p(b'https'))
+            for option, value in ((47, 1), (99, 1), (64, 1), (81, 2), (84, 4), (121, 1), (52, 0)):
+                self.set(option, ctypes.c_long(value))
+            ca = os.environ.get('CURL_CA_BUNDLE') or os.environ.get('SSL_CERT_FILE')
+            if ca:
+                self.set(10065, ctypes.c_char_p(ca.encode()))
+        except BaseException:
+            self.close()
+            raise
+
+    def set(self, option, value):
+        if self.lib.curl_easy_setopt(self.handle, option, value):
+            raise ProbeError('CURL OPT')
+
+    def receive(self, pointer, size, count, userdata):
+        length = size * count
+        if len(self.body) + length > 65535:
+            return 0
+        self.body.extend(ctypes.string_at(pointer, length))
+        return length
+
+    def info(self, option, integer=False):
+        value = ctypes.c_long() if integer else ctypes.c_double()
+        if self.lib.curl_easy_getinfo(self.handle, option, ctypes.byref(value)):
+            raise ProbeError('CURL INFO')
+        return value.value
+
+    def query(self, name, qtype=1, _get=False, _deadline=None, _elapsed=0):
+        packet = query(name, qtype)
+        deadline = _deadline or time.monotonic() + self.timeout * (1 if self.connected else 3)
+        self.body.clear()
+        self.error.value = b''
+        if _get:
+            separator = '&' if '?' in self.url else '?'
+            url = self.url + separator + 'dns=' + base64.urlsafe_b64encode(packet).decode('ascii').rstrip('=')
+            self.set(10002, ctypes.c_char_p(url.encode()))
+            self.set(80, ctypes.c_long(1))
+        else:
+            self.set(10002, ctypes.c_char_p(self.url.encode()))
+            self.set(47, ctypes.c_long(1))
+            self.set(10015, ctypes.c_char_p(packet))
+            self.set(60, ctypes.c_long(len(packet)))
+        self.set(156, ctypes.c_long(int(self.timeout * 2000)))
+        self.set(155, ctypes.c_long(max(1, int((deadline - time.monotonic()) * 1000))))
+        code = self.lib.curl_easy_perform(self.handle)
+        tcp = self.info(0x300005)
+        tls = self.info(0x300021)
+        if code:
+            message = self.error.value.decode('utf-8', 'replace').lower()
+            if code == 28:
+                label = 'TLS DROP' if tcp and not tls or any(v in message for v in ('ssl connection timeout', 'tls handshake', 'ssl handshake')) else 'SYN DROP' if 'connect' in message and any(v in message for v in ('timed out', 'timeout')) else 'TIMEOUT' if tls or self.connected else 'SYN DROP'
+            elif code in (51, 60):
+                label = 'NO CA BUNDLE' if any(t in message for t in ('self-signed', 'self signed', 'unable to get local issuer', 'unable to verify the first')) else 'TLS ERR'
+            elif code == 77:
+                label = 'CA FAIL'
+            elif code in (35, 56):
+                label = 'TLS SPOOF' if 'wrong version number' in message else 'TLS BLOCK' if 'protocol version' in message or 'protocol_version' in message else 'TLS RST' if 'reset' in message or not tls and any(v in message for v in ('eof', 'closed', 'syscall')) else 'TLS ALERT' if 'alert' in message else 'TLS ERR' if not tls else 'TLS EOF'
+            else:
+                os_error = self.info(0x200019, True)
+                connection_error = 'REFUSED' if 'refused' in message or os_error == errno.ECONNREFUSED else 'NET UNREACH' if os_error in (errno.ENETUNREACH, errno.ENETDOWN) else 'HOST UNREACH' if os_error in (errno.EHOSTUNREACH, errno.EHOSTDOWN) else 'OS ERR'
+                label = {7: connection_error, 23: 'BAD DNS', 16: 'HTTP2 ERR', 92: 'HTTP2 RST', 52: 'TLS EOF'}.get(code, 'DOH FAIL')
+            self.closed = code != 28 or self.info(0x20002e, True) != 3
+            return failure(label)
+        self.connected = True
+        status = self.info(0x200002, True)
+        if not 200 <= status < 300:
+            if not _get and time.monotonic() < deadline:
+                result = self.query(name, qtype, True, deadline, _elapsed + max(0, (self.info(0x300003) - tls) * 1000))
+                if result['error'].startswith('HTTP '):
+                    return failure('HTTP ' + str(status))
+                return result
+            return failure('HTTP ' + str(status))
+        elapsed = (self.info(0x300003) - tls) * 1000
+        try:
+            answer = parse(bytes(self.body), packet)
+        except (ValueError, UnicodeError, struct.error):
+            return failure('BAD DNS')
+        answer.update(ms=_elapsed + max(0.0, elapsed), error='', new_connections=self.info(0x20001a, True))
+        return answer
+
+    def close(self):
+        if self.handle:
+            self.lib.curl_easy_cleanup(self.handle)
+            self.handle = None
+        if self.headers:
+            self.lib.curl_slist_free_all(self.headers)
+            self.headers = None
+        if self.resolve:
+            self.lib.curl_slist_free_all(self.resolve)
+            self.resolve = None
+
+
+class DotSession:
+    def __init__(self, server, timeout, context):
+        self.sock = None
+        self.timeout = timeout
+        self.broken = ''
+        stage = 'connect'
+        raw = None
+        try:
+            raw = socket.create_connection((server.ip, server.dot_port), timeout)
+            raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            stage = 'handshake'
+            raw.settimeout(timeout)
+            self.sock = context.wrap_socket(raw, server_hostname=server.dot)
+        except (OSError, ssl.SSLError) as exc:
+            if raw:
+                raw.close()
+            raise ProbeError(tls_error(exc, stage)) from exc
+
+    def query(self, name, qtype=1):
+        if self.broken:
+            return failure(self.broken)
+        packet = query(name, qtype)
+        start = time.monotonic()
+        try:
+            self.sock.settimeout(self.timeout)
+            self.sock.sendall(struct.pack('!H', len(packet)) + packet)
+            size = struct.unpack('!H', exact(self.sock, 2, start + self.timeout))[0]
+            data = exact(self.sock, size, start + self.timeout)
+            elapsed = (time.monotonic() - start) * 1000
+            answer = parse(data, packet)
+            answer.update(ms=elapsed, error='')
+            return answer
+        except (OSError, ProbeError) as exc:
+            self.broken = 'TLS EOF' if isinstance(exc, ProbeError) else tls_error(exc, 'query')
+            self.close()
+            return failure(self.broken)
+        except (ValueError, UnicodeError, struct.error):
+            return failure('BAD DNS')
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+
+
+def exact(sock, count, deadline):
+    result = b''
+    while len(result) < count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        sock.settimeout(remaining)
+        chunk = sock.recv(count - len(result))
+        if not chunk:
+            raise ProbeError('EOF')
+        result += chunk
+    return result
+
+
+def exchange(server, transport, packet, timeout, context):
+    af = socket.AF_INET6 if ':' in server.ip else socket.AF_INET
+    with socket.socket(af, socket.SOCK_DGRAM) as sock:
+        sock.connect((server.ip, server.port))
+        deadline = time.monotonic() + timeout
+        sock.send(packet)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            sock.settimeout(remaining)
+            data = sock.recv(65535)
+            try:
+                parse(data, packet)
+                return data
+            except (ValueError, UnicodeError, struct.error):
+                continue
+
+
+def probe(server, transport, name, timeout, context, qtype=1):
+    session = None
+    try:
+        if transport != 'UDP':
+            session = DotSession(server, timeout, context) if transport == 'DoT' else DohSession(server, timeout)
+            return session.query(name, qtype)
+        packet = query(name, qtype)
+        start = time.monotonic()
+        data = exchange(server, transport, packet, timeout, context)
+        result = parse(data, packet)
+        result['ms'] = (time.monotonic() - start) * 1000
+        result['error'] = ''
+        return result
+    except ssl.SSLCertVerificationError as exc:
+        error = tls_error(exc, 'handshake')
+    except (socket.timeout, TimeoutError, subprocess.TimeoutExpired):
+        error = 'TIMEOUT'
+    except ConnectionRefusedError:
+        error = 'REFUSED'
+    except ConnectionResetError:
+        error = 'RESET'
+    except ssl.SSLError:
+        error = 'TLS FAIL'
+    except ProbeError as exc:
+        error = str(exc)
+    except (ValueError, UnicodeError, struct.error):
+        error = 'BAD DNS'
+    except OSError:
+        error = 'NET FAIL'
+    finally:
+        if session:
+            session.close()
+    return failure(error)
+
+
+def resolver_org(ip, timeout, context):
+    address = ipaddress.ip_address(ip)
+    if not address.is_global:
+        return ''
+    if address.version == 4:
+        name = '.'.join(reversed(ip.split('.'))) + '.origin.asn.cymru.com'
+    else:
+        name = '.'.join(reversed(address.exploded.replace(':', ''))) + '.origin6.asn.cymru.com'
+    fallbacks = [Server('Yandex reference', '77.88.8.8', doh='https://common.dot.dns.yandex.net/dns-query'), Server('NextDNS reference', '45.90.28.0', doh='https://dns.nextdns.io/dns-query'), Server('OpenDNS reference', '208.67.222.222', doh='https://dns.opendns.com/dns-query')]
+    for reference in BOOTSTRAP + fallbacks:
+        result = probe(reference, 'DoH', name, timeout, context, 16)
+        if result['error'] or not result['txt']:
+            continue
+        fields = result['txt'][0].split('|')[0].strip().split()
+        if not fields:
+            continue
+        asn = fields[0]
+        if not asn.isdigit():
+            continue
+        detail = probe(reference, 'DoH', 'AS' + asn + '.asn.cymru.com', timeout, context, 16)
+        org = detail['txt'][0].strip('"').split('|')[-1].strip() if detail['txt'] else ''
+        if len(org) == 10 and org[4:5] == '-' and org[7:8] == '-' and org.replace('-', '').isdigit():
+            org = ''
+        org = ''.join(c for c in org if 32 <= ord(c) <= 126)[:60]
+        return 'AS' + asn + (' · ' + org if org else '')
+    return ''
+
+
+def enabled(server, transport):
+    return server.udp if transport == 'UDP' else bool(server.dot if transport == 'DoT' else server.doh)
+
+
+_bootstrap_cache = {}
+_bootstrap_lock = threading.Lock()
+
+
+def tls_target(server, transport, timeout, context):
+    host = server.dot if transport == 'DoT' else urllib.parse.urlsplit(server.doh).hostname
+    try:
+        ipaddress.ip_address(host)
+        return replace(server, ip=host)
+    except ValueError:
+        pass
+    with _bootstrap_lock:
+        ip = _bootstrap_cache.get(host)
+    if ip:
+        return replace(server, ip=ip)
+    try:
+        response = subprocess.run(['nslookup', host], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout)
+        text = response.stdout.decode('utf-8', 'replace')
+        addresses = []
+        found = False
+        for line in text.splitlines():
+            if line.strip().lower().startswith('name:'):
+                found = True
+            elif found and line.strip().lower().startswith('address'):
+                for token in line.split():
+                    try:
+                        addresses.append(str(ipaddress.ip_address(token.strip('[]'))))
+                    except ValueError:
+                        pass
+        if addresses:
+            ip = next((v for v in addresses if ':' not in v), addresses[0])
+            with _bootstrap_lock:
+                _bootstrap_cache[host] = ip
+            return replace(server, ip=ip)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    for reference in BOOTSTRAP + [Server('Quad9 reference', '9.9.9.9')]:
+        answer = probe(reference, 'UDP', host, timeout, context)
+        if not answer['error'] and answer['ips']:
+            ip = answer['ips'][0]
+            with _bootstrap_lock:
+                _bootstrap_cache[host] = ip
+            return replace(server, ip=ip)
+    raise ProbeError('DNS FAIL')
+
+
+def scan_transport(server, transport, domains, timeout, context, invalid):
+    result = {'control': failure('SKIPPED'), 'controls': {}, 'domains': {}, 'invalid': None, 'egress': None, 'target_ip': server.ip}
+    session = None
+    try:
+        if transport == 'UDP':
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+                controls = {pool.submit(probe, server, 'UDP', name, timeout, context): name for name in ALLOWED_DOMAINS}
+                domain_jobs = {}
+                for future in concurrent.futures.as_completed(controls):
+                    answer = future.result()
+                    result['controls'][controls[future]] = answer
+                    if not answer['error'] and not answer['tc'] and answer['rcode'] == 0 and not domain_jobs:
+                        domain_jobs = {pool.submit(probe, server, 'UDP', name, timeout, context): name for name in domains}
+                good = [a for a in result['controls'].values() if not a['error'] and not a['tc'] and a['rcode'] == 0]
+                result['control'] = min(good, key=lambda a: a['ms']) if good else next(iter(result['controls'].values()))
+                for future in concurrent.futures.as_completed(domain_jobs):
+                    result['domains'][domain_jobs[future]] = future.result()
+                if good:
+                    result['invalid'] = probe(server, 'UDP', invalid, min(timeout, 2), context)
+            return result
+        else:
+            target = tls_target(server, transport, timeout, context)
+            result['target_ip'] = target.ip
+            session = DotSession(target, timeout, context) if transport == 'DoT' else DohSession(target, timeout)
+            warmup = session.query(ALLOWED_DOMAINS[0])
+            if (transport == 'DoT' and warmup['error']) or (transport == 'DoH' and warmup['error'] and session.closed):
+                result['control'] = warmup
+                return result
+            execute = session.query
+        deadline = time.monotonic() + timeout * (len(domains) + 1) + 3
+        for name in domains:
+            answer = execute(name) if time.monotonic() + timeout <= deadline else failure('SKIPPED')
+            if transport == 'DoH' and (answer['error'] or answer['rcode']) and answer['error'] != 'SKIPPED' and not session.closed:
+                pause = random.uniform(.3, 1)
+                if time.monotonic() + pause + timeout <= deadline:
+                    time.sleep(pause)
+                    answer = execute(name)
+            result['domains'][name] = answer
+        good = [a for a in result['domains'].values() if not a['error'] and not a['tc'] and a['rcode'] == 0]
+        result['control'] = min(good, key=lambda a: a['ms']) if good else next(iter(result['domains'].values()), warmup)
+        result['invalid'] = execute(invalid) if time.monotonic() + timeout <= deadline else failure('SKIPPED')
+        return result
+    except ProbeError as exc:
+        result['control'] = failure(str(exc))
+        return result
+    finally:
+        if session:
+            session.close()
+
+
+def reference_panel():
+    endpoints = {}
+    for server in SERVERS:
+        for transport in ('DoH', 'DoT'):
+            if enabled(server, transport):
+                endpoint = server.doh if transport == 'DoH' else server.dot
+                port = (urllib.parse.urlsplit(endpoint).port or 443) if transport == 'DoH' else server.dot_port
+                endpoints.setdefault((transport, endpoint, port), replace(server, ip='', udp=False))
+    return endpoints
+
+
+def fixed_truth(domains, timeout, context, invalid, show_progress=False):
+    truth = {name: set() for name in domains}
+    references = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        endpoints = reference_panel()
+        jobs = {pool.submit(scan_transport, server, transport, domains, timeout, context, invalid): (i, transport) for i, ((transport, endpoint, port), server) in enumerate(endpoints.items())}
+        for future in concurrent.futures.as_completed(jobs):
+            index, transport = jobs[future]
+            references.setdefault(index, {})[transport] = future.result()
+            if show_progress:
+                progress(f'1/3 · Защищённые эталоны: {len(references)}/{len(jobs)}')
+    return truth, add_truth(truth, references)
+
+
+def scan_server(server, domains, timeout, context, invalid):
+    result = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = {pool.submit(scan_transport, server, transport, domains, timeout, context, invalid): transport for transport in ('UDP', 'DoT', 'DoH') if enabled(server, transport)}
+        if enabled(server, 'UDP'):
+            jobs[pool.submit(probe_egress, server, timeout, context)] = 'egress'
+        for future in concurrent.futures.as_completed(jobs):
+            result[jobs[future]] = future.result()
+    if 'UDP' in result:
+        result['UDP']['egress'] = result.get('egress')
+    return result
+
+
+def probe_egress(server, timeout, context):
+    result = failure('TIMEOUT')
+    for attempt in range(2):
+        result = probe(server, 'UDP', 'whoami.akamai.net', min(timeout, 2) if attempt == 0 else timeout, context)
+        if not result['error'] and result['ips']:
+            return result
+        if attempt == 0:
+            time.sleep(.2)
+    return result
+
+
+def cell(result, transport='UDP'):
+    if result is None:
+        return '—'
+    if transport != 'UDP':
+        answers = list(result['domains'].values())
+        good = [a['ms'] for a in answers if not a['error'] and not a['tc'] and a['rcode'] == 0]
+        if good:
+            return f'{min(good):.1f}ms'
+        control = next((a for a in answers if a['error'] or a['rcode'] or not a['ips']), result['control'])
+    else:
+        control = result['control']
+    if control['error']:
+        return control['error']
+    if control['tc']:
+        return 'TRUNCATED'
+    if control['rcode']:
+        return {2: 'SERVFAIL', 3: 'NXDOMAIN', 5: 'REFUSED'}.get(control['rcode'], 'RCODE ' + str(control['rcode']))
+    return f"{control['ms']:.1f}ms"
+
+
+def text_width(text):
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
+
+
+def wrap_cell(text, width):
+    lines = []
+    for part in str(text).split('\n'):
+        current = ''
+        for char in part:
+            if unicodedata.category(char).startswith('C'):
+                char = '?'
+            if current and text_width(current + char) > width:
+                lines.append(current)
+                current = ''
+            current += char
+        lines.append(current)
+    return lines
+
+
+def latency_color(result, transport, value):
+    if result is None:
+        return '90'
+    if not value.endswith('ms'):
+        return '31'
+    answers = list(result.get('controls' if transport == 'UDP' else 'domains', {}).values())
+    if answers and any(a['error'] or a['tc'] or a['rcode'] for a in answers):
+        return '33'
+    return '32'
+
+
+def resolver_cell(item):
+    ip = item['ip']
+    if not ip:
+        return '—', '90'
+    if not item['cells']['UDP'].endswith('ms'):
+        return ip + '→—', '90'
+    if not item['egress'] or item['egress'] == '0.0.0.0':
+        return ip + ': нет данных', '90'
+    if fake_ip(item['egress']):
+        return ip + '→Fake-IP', '35'
+    org = item['organization']
+    if not org:
+        return ip + '→' + item['egress'], '37'
+    label = org.split(' · ', 1)[-1].split(' - ', 1)[0]
+    return ip + '→' + label, '32' if any(v in label.lower() for v in KNOWN_RESOLVERS) else '31'
+
+
+def render_table(report, columns=None):
+    columns = max(40, min(140, columns or shutil.get_terminal_size((120, 24)).columns))
+    padding = 1 if columns >= 85 else 0
+    widths = [10, 9, 9, 9, 21, 8] if columns >= 76 else [7, 5, 5, 5, 7, 4]
+    spare = columns - sum(widths) - 7 - 12 * padding
+    resolver_width = max((text_width(resolver_cell(r)[0]) for r in report), default=21)
+    caps = [max(12, min(26, max((text_width(r['name']) for r in report), default=12))), 10, 10, 10, max(18, min(24, resolver_width)), 8]
+    while spare > 0:
+        changed = False
+        for index in (4, 4, 4, 4, 0, 0, 0, 0, 1, 2, 3, 5):
+            if spare and widths[index] < caps[index]:
+                widths[index] += 1
+                spare -= 1
+                changed = True
+        if not changed:
+            break
+
+    def border(left, join, right, horizontal='─'):
+        print(paint(left + join.join(horizontal * (w + 2 * padding) for w in widths) + right, '90'))
+
+    def row(values, colors):
+        wrapped = [wrap_cell(value, width) for value, width in zip(values, widths)]
+        for line_no in range(max(map(len, wrapped))):
+            chunks = []
+            for index, lines in enumerate(wrapped):
+                line = lines[line_no] if line_no < len(lines) else ''
+                line += ' ' * (widths[index] - text_width(line))
+                color = '90' if line.strip() == 'SKIPPED' else '31' if index in (1, 2, 3) and line_no > 0 and line.strip() else colors[index]
+                chunks.append(' ' * padding + paint(line, color) + ' ' * padding)
+            print(paint('│', '90') + paint('│', '90').join(chunks) + paint('│', '90'))
+
+    border('┌', '┬', '┐')
+    headers = ['Провайдер', 'DoH', 'DoT', 'UDP', 'UDP-резолвер', 'Spoofing']
+    if columns < 76:
+        headers = ['DNS', 'DoH', 'DoT', 'UDP', 'UDP-резолвер', 'Spoofing']
+    row(headers, ['37;1'] * 6)
+    border('╞', '╪', '╡', '═')
+    for item in report:
+        real, real_color = resolver_cell(item)
+        score = f"{item['differences']}/{item['judged']}" if item['judged'] else '—'
+        score_color = '90' if not item['judged'] else '32' if not item['differences'] else '31' if item['differences'] == item['judged'] else '33'
+        if any('Fake-IP' in s for s in item['signals']):
+            score_color = '35'
+        if any('.invalid' in s for s in item['signals']):
+            score = 'INVALID'
+            score_color = '31'
+        protocol_values = []
+        for transport in ('DoH', 'DoT', 'UDP'):
+            value = item['cells'][transport]
+            if value.endswith('ms'):
+                errors = set()
+                for answer in item['results'].get(transport, {}).get('domains', {}).values():
+                    label = answer['error'] or ('TRUNCATED' if answer['tc'] else {2: 'SERVFAIL', 3: 'NXDOMAIN', 5: 'REFUSED'}.get(answer['rcode'], 'RCODE ' + str(answer['rcode'])) if answer['rcode'] else '')
+                    if label:
+                        errors.add(label)
+                errors = sorted(errors)
+                value += ''.join('\n' + e for e in errors)
+            protocol_values.append(value)
+        values = [item['name']] + protocol_values + [real, score]
+        colors = ['36;1'] + [latency_color(item['results'].get(t), t, item['cells'][t]) for t in ('DoH', 'DoT', 'UDP')] + [real_color, score_color]
+        row(values, colors)
+    border('└', '┴', '┘')
+
+
+def suspicious_ip(value):
+    address = ipaddress.ip_address(value)
+    return address.is_loopback or address.is_unspecified or address.is_link_local or address.is_private or address in ipaddress.ip_network('198.18.0.0/15') or address in ipaddress.ip_network('100.64.0.0/10')
+
+
+def assess(result, truth):
+    differences = 0
+    judged = 0
+    signals = []
+    if result is None:
+        return judged, differences, signals
+    control = result['control']
+    alive = not control['error'] and not control['tc'] and control['rcode'] == 0
+    invalid = result['invalid']
+    if invalid and not invalid['error'] and not invalid['tc'] and invalid['ips']:
+        signals.append('несуществующий домен .invalid получил IP')
+    for name, answer in result['domains'].items():
+        reference = truth.get(name, set())
+        if not reference or not alive:
+            continue
+        if answer['tc'] or answer['error'] == 'SKIPPED':
+            continue
+        judged += 1
+        ips = answer['ips'] if not answer['error'] and answer['rcode'] == 0 else []
+        if not reference.intersection(ips):
+            differences += 1
+        if answer['error'] and answer['error'] != 'SKIPPED':
+            signals.append(name + ': нет ответа на проверяемый домен при работающем UDP')
+        if answer['rcode'] == 3 or (answer['rcode'] == 0 and not answer['ips'] and not answer['tc']):
+            signals.append(name + ': NXDOMAIN/EMPTY при наличии адреса через DoH')
+        if answer['ips'] and any(suspicious_ip(ip) for ip in answer['ips']) and all(not suspicious_ip(ip) for ip in reference):
+            signals.append(name + ': локальный адрес / Fake-IP вместо публичного')
+    return judged, differences, signals
+
+
+def add_truth(truth, results):
+    count = 0
+    for data in results.values():
+        for transport in ('DoH', 'DoT'):
+            for name, answer in data.get(transport, {}).get('domains', {}).items():
+                if answer['error'] or answer['tc'] or answer['rcode'] != 0:
+                    continue
+                ips = {ip for ip in answer['ips'] if not fake_ip(ip)}
+                if ips:
+                    truth.setdefault(name, set()).update(ips)
+                    count += 1
+    return count
+
+
+def fake_ip(ip):
+    address = ipaddress.ip_address(ip)
+    return address.version == 4 and address in ipaddress.ip_network('198.18.0.0/15')
+
+
+def detect_hijacks(items):
+    networks = {}
+    findings = []
+    for item in items:
+        ip = item['egress']
+        if not ip or ip == '0.0.0.0' or fake_ip(ip):
+            continue
+        address = ipaddress.ip_address(ip)
+        prefix = ipaddress.ip_network(ip + ('/24' if address.version == 4 else '/48'), strict=False)
+        brand = item['name'].split(' (')[0].split(' #')[0].strip()
+        networks.setdefault(str(prefix), set()).add(brand)
+    for item in items:
+        ip = item['egress']
+        if not ip or ip == '0.0.0.0' or fake_ip(ip):
+            continue
+        address = ipaddress.ip_address(ip)
+        prefix = str(ipaddress.ip_network(ip + ('/24' if address.version == 4 else '/48'), strict=False))
+        exempt = any(v in item['name'].lower() for v in ('msk-ix', 'нсди', 'nsdi'))
+        org = item['organization'].split(' · ', 1)[-1].split(' - ', 1)[0].lower()
+        if len(networks[prefix]) >= 2 and not exempt and not any(v in org for v in KNOWN_RESOLVERS):
+            findings.append({'name': item['name'], 'network': prefix})
+    return findings
+
+
+def read_value(prompt, stream):
+    while True:
+        print(prompt, end='', flush=True)
+        value = stream.readline()
+        if value in ('', b''):
+            raise EOFError
+        if isinstance(value, bytes):
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                print('Некорректные символы во вводе. Введите значение заново.')
+                continue
+        return value.strip()
+
+
+def check_doh(value):
+    url = urllib.parse.urlsplit(value)
+    if url.scheme != 'https' or not url.hostname or url.username or url.password or url.fragment:
+        raise ValueError('Нужен HTTPS URL без учётных данных и фрагмента')
+    if any(ord(c) <= 32 or ord(c) >= 127 for c in value):
+        raise ValueError('Недопустимые символы в DoH URL')
+    if url.port is not None and not 1 <= url.port <= 65535:
+        raise ValueError('Неверный порт')
+    return value
+
+
+def custom_server(ip, dot=None, doh=None, port=53, dot_port=853):
+    parsed = ipaddress.ip_address(ip.strip().strip('[]'))
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+        parsed = parsed.ipv4_mapped
+    address = str(parsed)
+    if parsed.is_multicast or parsed.is_unspecified or parsed.is_link_local or address == '255.255.255.255':
+        raise ValueError('Укажите unicast IP DNS-сервера, не multicast, unspecified или link-local')
+    if not 1 <= port <= 65535 or not 1 <= dot_port <= 65535:
+        raise ValueError('Порт должен быть от 1 до 65535')
+    known = next((s for s in SERVERS if s.ip == address), None)
+    dot = (known.dot if known else '') if dot is None else dot
+    doh = (known.doh if known else '') if doh is None else doh
+    if dot:
+        try:
+            dot = str(ipaddress.ip_address(dot.strip('[]')))
+        except ValueError:
+            dot = domain(dot)
+    return Server('Custom ' + address, address, dot, check_doh(doh) if doh else '', port, dot_port)
+
+
+def interactive():
+    with open('/dev/tty', 'rb', buffering=0) as stream:
+        while True:
+            title('Какие DNS-серверы проверить?')
+            print('1. Популярные: Google, Cloudflare, Quad9, AdGuard, Yandex, DNS.SB')
+            print(f'2. Все пресеты ({len(SERVERS)} серверов)')
+            print('3. Выбрать из списка')
+            print('4. Ввести свои DNS-серверы')
+            choice = read_value('Enter — назад. Выбор: ', stream)
+            if choice in ('', '0'):
+                return None
+            if choice == '1':
+                chosen = [next(s for s in SERVERS if s.name == name) for name in ('Google', 'Cloudflare IP', 'Quad9', 'AdGuard', 'Yandex', 'DNS.SB')]
+                break
+            if choice == '2':
+                chosen = SERVERS[:]
+                break
+            if choice == '3':
+                for i, server in enumerate(SERVERS, 1):
+                    print(f'{i:2}. {server.name:23} {server.ip or server.dot or server.doh}')
+                try:
+                    text = read_value('Номера через пробел (например 1 3 7), Enter — назад: ', stream)
+                    if not text:
+                        continue
+                    indices = list(dict.fromkeys(int(v) for v in text.replace(',', ' ').split()))
+                    if not indices or any(i < 1 or i > len(SERVERS) for i in indices):
+                        raise ValueError('Некорректный номер')
+                    chosen = [SERVERS[i - 1] for i in indices]
+                    break
+                except ValueError:
+                    print('Укажите номера серверов из списка.')
+            elif choice == '4':
+                chosen = []
+                print('UDP — указанный IP. DoT/DoH — адреса введённых сервисов.')
+                while len(chosen) < 10:
+                    ip = read_value('IP DNS-сервера (IPv4 / IPv6), Enter — закончить: ', stream)
+                    if not ip:
+                        break
+                    try:
+                        defaults = custom_server(ip)
+                        if defaults.dot or defaults.doh:
+                            print('Для известного IP предложены параметры пресета. Enter — принять, «-» — отключить протокол.')
+                        udp_port = int(read_value('Порт UDP [53]: ', stream) or '53')
+                        dot = read_value('Адрес DoT-сервиса (имя или IP)' + (' [' + defaults.dot + ']' if defaults.dot else ' (Enter — не проверять)') + ': ', stream)
+                        dot = '' if dot == '-' else dot or defaults.dot
+                        dot_port = int(read_value('Порт DoT [853]: ', stream) or '853') if dot else 853
+                        doh = read_value('DoH URL' + (' [' + defaults.doh + ']' if defaults.doh else ' (Enter — не проверять)') + ': ', stream)
+                        doh = '' if doh == '-' else doh or defaults.doh
+                        if not 1 <= udp_port <= 65535 or not 1 <= dot_port <= 65535:
+                            raise ValueError('Порт должен быть от 1 до 65535')
+                        chosen.append(custom_server(ip, dot, doh, udp_port, dot_port))
+                    except ValueError as exc:
+                        print('Ошибка: ' + str(exc))
+                if chosen:
+                    break
+        while True:
+            print('Проверяемые домены по умолчанию: ' + ', '.join(DEFAULT_DOMAINS))
+            text = read_value('Свой список до 5 доменов или Enter — стандартный: ', stream)
+            try:
+                domains = list(dict.fromkeys(domain(v) for v in text.replace(',', ' ').split())) if text else DEFAULT_DOMAINS
+                if not 1 <= len(domains) <= 5:
+                    raise ValueError('Нужно от 1 до 5 доменов')
+                return chosen, domains
+            except ValueError as exc:
+                print('Ошибка: ' + str(exc))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Xmenu: UDP / DoT / DoH DNS diagnostics')
+    parser.add_argument('--servers', help='Preset numbers separated by commas, or all')
+    parser.add_argument('--ip', help='Custom IPv4 or IPv6 UDP DNS server')
+    parser.add_argument('--dot', default=None, help='DoT service hostname or IP; empty disables DoT')
+    parser.add_argument('--doh', default=None, help='Custom DoH HTTPS URL; empty disables DoH')
+    parser.add_argument('--domains', default=','.join(DEFAULT_DOMAINS))
+    parser.add_argument('--timeout', type=float, default=10.0)
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args()
+    if args.ip:
+        chosen = [custom_server(args.ip, args.dot, args.doh)]
+    elif args.servers:
+        ids = list(range(1, len(SERVERS) + 1)) if args.servers == 'all' else list(dict.fromkeys(int(i) for i in args.servers.split(',')))
+        if not ids or any(i < 1 or i > len(SERVERS) for i in ids):
+            raise ValueError('Неверный номер сервера')
+        chosen = [SERVERS[i - 1] for i in ids]
+    else:
+        selection = interactive()
+        if selection is None:
+            return 3
+        chosen, domains = selection
+    if args.ip or args.servers:
+        domains = list(dict.fromkeys(domain(i) for i in args.domains.split(',')))
+    if not 1 <= len(domains) <= 5 or not 0.2 <= args.timeout <= 10:
+        raise ValueError('Нужно 1–5 доменов; timeout 0.2–10 секунд')
+    context = ssl.create_default_context()
+    curl_library()
+    invalid = 'xmenu-' + secrets.token_hex(8) + '.invalid'
+    started = time.monotonic()
+    if not args.json:
+        progress('1/3 · Фиксированные независимые эталоны DoH / DoT…')
+    truth, reference_ok = fixed_truth(domains, args.timeout, context, invalid, show_progress=not args.json)
+    results = {}
+    for i, server in enumerate(chosen):
+        if not args.json:
+            progress(f'2/3 · DNS {i + 1}/{len(chosen)}: {server.name}…')
+        results[i] = scan_server(server, domains, args.timeout, context, invalid)
+    egress_ips = {data['egress']['ips'][0] for data in results.values() if data.get('egress') and data['egress']['ips']}
+    if not args.json:
+        progress('3/3 · Реальные резолверы и ASN…')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        org_jobs = {pool.submit(resolver_org, ip, args.timeout, context): ip for ip in egress_ips}
+        organizations = {org_jobs[future]: future.result() for future in concurrent.futures.as_completed(org_jobs)}
+    report = []
+    working = 0
+    incomplete = 0
+    available = {t: 0 for t in ('UDP', 'DoT', 'DoH')}
+    totals = {t: 0 for t in ('UDP', 'DoT', 'DoH')}
+    no_ca = 0
+    for i, server in enumerate(chosen):
+        data = results[i]
+        judged, differences, signals = assess(data.get('UDP'), truth)
+        cells = {t: cell(data.get(t), t) for t in ('UDP', 'DoT', 'DoH')}
+        for transport, value in cells.items():
+            available[transport] += value.endswith('ms')
+            if enabled(server, transport):
+                if value in ('NO CA BUNDLE', 'CA FAIL'):
+                    no_ca += 1
+                else:
+                    totals[transport] += 1
+        working += any(v.endswith('ms') for v in cells.values())
+        incomplete += bool(server.udp and (judged < len(domains) or any(a['error'] or a['tc'] for a in data.get('UDP', {}).get('domains', {}).values())))
+        egress = data.get('UDP', {}).get('egress')
+        egress = egress['ips'][0] if egress and egress['ips'] else None
+        org = organizations.get(egress, '')
+        report.append({'name': server.name, 'ip': server.ip, 'cells': cells, 'judged': judged, 'differences': differences, 'signals': signals, 'egress': egress, 'organization': org, 'results': data})
+    batch_findings = detect_hijacks(report)
+    suspicious = sum(bool(item['signals']) or item['differences'] > 0 for item in report)
+    elapsed = time.monotonic() - started
+    if args.json:
+        settings = {'timeout': args.timeout, 'target_scheduling': 'one-server-at-a-time', 'tls_target_policy': 'service-endpoint', 'reference_policy': 'fixed-public-encrypted-panel', 'reference_endpoints': list(reference_panel())}
+        print(json.dumps({'servers': report, 'domains': domains, 'allowed_domains': ALLOWED_DOMAINS, 'reference_answers': reference_ok, 'truth': {name: sorted(ips) for name, ips in truth.items()}, 'batch_findings': batch_findings, 'settings': settings, 'no_ca_bundle': no_ca, 'elapsed': elapsed}, ensure_ascii=False))
+        return 0
+    progress('')
+    render_table(report)
+    print(paint(f'Итог: DNS {len(chosen)} · с успешными запросами {working} · подозрительных {suspicious} · {elapsed:.1f} с'))
+    print('Успешно: ' + ' · '.join(t + ' ' + str(available[t]) + '/' + str(totals[t]) for t in ('UDP', 'DoT', 'DoH')))
+    if no_ca:
+        print('Не проверены из-за доверия сертификатам: ' + str(no_ca) + '; в недоступные серверы не включены.')
+    if batch_findings:
+        print(paint('Сравнение между DNS: общая неизвестная сеть у ' + ', '.join(dict.fromkeys(v['name'] for v in batch_findings)) + '.', '33'))
+    if suspicious:
+        print(paint('Есть признаки фильтрации, подмены ответов или локальных DNS-правил.', '33'))
+    elif reference_ok == 0 or incomplete:
+        print(paint('Недостаточно данных для общего вывода: часть DNS-запросов не завершена.', '33'))
+    else:
+        print(paint('В выполненных проверках признаков подмены не найдено.', '32'))
+    print('ms — DNS без TCP/TLS; Spoofing — расхождения UDP с защищёнными ответами.')
+    print('UDP — выбранный IP; DoT/DoH — адреса указанных сервисов.')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (KeyboardInterrupt, EOFError):
+        print('\nПроверка отменена.')
+        sys.exit(130)
+    except (ValueError, OSError) as exc:
+        print('Ошибка: ' + str(exc), file=sys.stderr)
+        sys.exit(2)
+
+XMENU_DNS_ENGINE
+}
+
+xmenu_server_diagnose() {
+    command -v python3 >/dev/null 2>&1 || { say 'Нужен Python 3: opkg install python3 python3-ssl'; return 2; }
+    python3 - "$@" <<'XMENU_SERVER_ENGINE'
+import argparse
+import atexit
+import concurrent.futures
+import errno
+import http.client
+import ipaddress
+import json
+import os
+import re
+import secrets
+import select
+import shlex
+import signal
+import shutil
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import time
+import threading
+import unicodedata
+import urllib.parse
+import math
+import statistics
+import weakref
+import zlib
+import datetime
+
+
+COLOR = sys.stdout.isatty() and os.environ.get('TERM') != 'dumb'
+DEFAULT_PORTS = [22, 80, 443, 8080, 8443, 2053, 2083, 2087, 2096, 2098, 31618]
+BYPASS_MARK = 0
+INPUT_CHAINS = []
+FLOW_RULES = []
+FLOW_LOCK = threading.RLock()
+CANCEL = threading.Event()
+API_ADDRESSES = {}
+MAX_DISCOVERY_PORTS = 5
+MAX_TOTAL_PORTS = 18
+END_TIME = float('inf')
+WAN_INTERFACE = ''
+ACTIVE_SOCKETS = weakref.WeakSet()
+SOCKET_LOCK = threading.RLock()
+
+
+def remaining(timeout):
+    if CANCEL.is_set():
+        raise OSError(errno.ECANCELED, 'Проверка остановлена')
+    value = min(timeout, END_TIME - time.monotonic())
+    if value <= 0:
+        raise OSError(errno.ECANCELED, 'Общий лимит времени исчерпан')
+    return max(.001, value)
+
+
+def stop_probes():
+    CANCEL.set()
+    with SOCKET_LOCK:
+        for sock in list(ACTIVE_SOCKETS):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+def public_target(value):
+    address = ipaddress.ip_address(value.strip().strip('[]'))
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if not address.is_global or address.is_multicast or address.is_reserved or address.is_loopback or address.is_link_local:
+        raise ValueError('Нужен публичный IP VPS: частные, CGNAT, loopback и специальные диапазоны не подходят')
+    if address.version == 4 and any(address in ipaddress.ip_network(prefix) for prefix in ('192.0.0.0/24', '192.88.99.0/24', '192.31.196.0/24', '192.52.193.0/24', '192.175.48.0/24')):
+        raise ValueError('Специальный инфраструктурный диапазон IANA не подходит для проверки VPS')
+    if address.version == 6 and (address.sixtofour or address.teredo or address.scope_id or address in ipaddress.ip_network('64:ff9b::/96')):
+        raise ValueError('Переходные IPv6-адреса 6to4/Teredo не подходят для прямой проверки VPS')
+    return str(address)
+
+
+def firewall(arguments):
+    return subprocess.run(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4).returncode == 0
+
+
+class FlowGuard:
+    def __init__(self, ip, protocol, local_port, remote_port):
+        self.rules = []
+        command = 'ip6tables' if family(ip) == socket.AF_INET6 else 'iptables'
+        tag = 'xmenu-server-' + str(os.getpid()) + '-' + secrets.token_hex(5)
+        with FLOW_LOCK:
+            try:
+                for binary, chain in INPUT_CHAINS:
+                    if binary != command:
+                        continue
+                    prefix = [binary, '-w', '-t', 'mangle']
+                    match = ['-s', ip, '-p', protocol, '--sport', str(remote_port), '--dport', str(local_port), '-m', 'comment', '--comment', tag, '-j', 'RETURN']
+                    rule = prefix + ['-D', chain] + match
+                    add = prefix + ['-I', chain, '1'] + match
+                    if not firewall(add):
+                        raise OSError(errno.ENOTSUP, 'Не удалось исключить входящую пробу из NFQUEUE')
+                    self.rules.append(rule)
+                    FLOW_RULES.append(rule)
+            except BaseException:
+                self.close()
+                raise
+
+    def close(self):
+        with FLOW_LOCK:
+            for rule in self.rules[:]:
+                try:
+                    if firewall(rule):
+                        self.rules.remove(rule)
+                        if rule in FLOW_RULES:
+                            FLOW_RULES.remove(rule)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+
+def cleanup_flows():
+    with FLOW_LOCK:
+        for rule in FLOW_RULES[:]:
+            try:
+                if firewall(rule):
+                    FLOW_RULES.remove(rule)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+
+atexit.register(cleanup_flows)
+
+
+def jump_target(row):
+    for flag in ('-j', '--jump', '-g', '--goto'):
+        if flag in row and row.index(flag) + 1 < len(row):
+            return row[row.index(flag) + 1]
+    return ''
+
+
+def detect_path(ip=None):
+    global INPUT_CHAINS
+    rules = ''
+    snapshots = []
+    inspection_errors = []
+    incoming_risks = []
+    INPUT_CHAINS = []
+    for binary in ('iptables', 'ip6tables'):
+        if ip is not None and (binary == 'ip6tables') != (family(ip) == socket.AF_INET6):
+            continue
+        for kind in ('nat', 'mangle'):
+            try:
+                result = subprocess.run([binary + '-save', '-t', kind], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
+                text = result.stdout.decode('ascii', 'replace')
+                if len(result.stdout) > 1048576:
+                    inspection_errors.append(binary + '-save ' + kind + ': неполный снимок')
+                if result.returncode:
+                    if binary == 'iptables' or ip is not None:
+                        inspection_errors.append(binary + '-save ' + kind)
+                    continue
+                snapshots.append((binary, kind, text[:1048576]))
+                rules += text
+                if kind == 'mangle':
+                    lines = [shlex.split(line) for line in text.splitlines() if line.startswith('-A ')]
+                    edges = {}
+                    for line in lines:
+                        target = jump_target(line)
+                        if target:
+                            edges.setdefault(line[1], set()).add(target)
+                    reachable = {'PREROUTING'}
+                    for _ in range(64):
+                        extra = set().union(*(edges.get(chain, set()) for chain in reachable))
+                        if extra.issubset(reachable):
+                            break
+                        reachable.update(extra)
+                    if any(not edges.get(chain, set()).issubset(reachable) for chain in reachable):
+                        incoming_risks.append('Неполный обход входящих цепочек ' + binary)
+                    for line in lines:
+                        if line[1] in reachable and jump_target(line) in ('NFQUEUE', 'QUEUE'):
+                            if 'nfqws' in line[1].lower():
+                                INPUT_CHAINS.append((binary, line[1]))
+                                protocol = line[line.index('-p') + 1] if '-p' in line else ''
+                                negated = '-p' in line and line.index('-p') > 0 and line[line.index('-p') - 1] == '!'
+                                if protocol not in ('tcp', 'udp', '6', '17') or negated:
+                                    incoming_risks.append('Входящая очередь может менять ICMP: ' + binary + '/' + line[1])
+                            else:
+                                incoming_risks.append('Нераспознанная входящая очередь: ' + binary + '/' + line[1])
+                        if '--comment' in line:
+                            tag = line[line.index('--comment') + 1]
+                            match = re.fullmatch(r'xmenu-server-(\d+)-[0-9a-f]{10}', tag)
+                            if match and not os.path.exists('/proc/' + match[1]):
+                                delete = [binary, '-w', '-t', kind, '-D'] + line[1:]
+                                with FLOW_LOCK:
+                                    if delete not in FLOW_RULES:
+                                        FLOW_RULES.append(delete)
+                                    if firewall(delete):
+                                        FLOW_RULES.remove(delete)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                if binary == 'iptables' or ip is not None:
+                    inspection_errors.append(binary + '-save ' + kind)
+    INPUT_CHAINS = list(dict.fromkeys(INPUT_CHAINS))
+    risks = incoming_risks
+    matched = False
+    for binary, kind, text in snapshots:
+        lines = [shlex.split(line) for line in text.splitlines() if line.startswith('-A ')]
+        graph = {}
+        for row in lines:
+            target = jump_target(row)
+            if target:
+                graph.setdefault(row[1], set()).add(target)
+        reachable = {'OUTPUT', 'POSTROUTING'}
+        for _ in range(64):
+            expanded = reachable | set().union(*(graph.get(c, set()) for c in reachable))
+            if expanded == reachable:
+                break
+            reachable = expanded
+        if any(not graph.get(chain, set()).issubset(reachable) for chain in reachable):
+            risks.append('Неполный обход исходящих цепочек ' + binary + '/' + kind)
+        exempt = set()
+        for row in lines:
+            if row[1] not in reachable:
+                continue
+            target = jump_target(row)
+            if target == 'RETURN' and '--mark' in row and '!' not in row and row[row.index('--mark') + 1] == '0x40000000/0x40000000':
+                tokens = row[2:]
+                allowed = {'-m', 'mark', '--mark', '0x40000000/0x40000000', 'comment', '--comment', '-j', 'RETURN'}
+                if '--comment' in tokens:
+                    tokens = tokens[:tokens.index('--comment')] + tokens[tokens.index('--comment') + 2:]
+                if all(token in allowed for token in tokens):
+                    exempt.add(row[1])
+                    matched = True
+            dangerous = target in ('REDIRECT', 'TPROXY', 'DNAT', 'MARK', 'CONNMARK', 'NFQUEUE', 'QUEUE')
+            excluded = '--mark' in row and row[row.index('--mark') - 1] == '!' and row[row.index('--mark') + 1] == '0x40000000/0x40000000'
+            if dangerous and row[1] not in exempt and not excluded:
+                risks.append(binary + '/' + kind + '/' + row[1] + ': ' + target)
+            elif dangerous and excluded:
+                matched = True
+    nft = ''
+    if shutil.which('nft'):
+        try:
+            result = subprocess.run(['nft', 'list', 'ruleset'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
+            nft = result.stdout.decode('ascii', 'replace')[:1048576]
+            if result.returncode or len(result.stdout) > 1048576 or re.search(r'\b(tproxy|redirect|dnat|queue)\b|meta mark set|ct mark set', nft, re.I):
+                risks.append('Правила nftables не подтверждены как безопасные для прямых проб')
+        except (OSError, subprocess.TimeoutExpired):
+            risks.append('Не удалось прочитать nftables')
+    proxy_rules = bool(re.search(r'\b(?:REDIRECT|TPROXY)\b', rules))
+    return {'mark': 0x40000000 if matched else 0, 'proxy_rules': proxy_rules, 'direct_ready': not risks and not inspection_errors, 'risks': risks, 'inspection_errors': inspection_errors, 'nft_present': bool(nft), 'policy_rules': '', 'interface': '', 'source': ''}
+
+
+def inspect_route(ip, path):
+    global WAN_INTERFACE
+    marked = route(ip)
+    try:
+        version = '-6' if family(ip) == socket.AF_INET6 else '-4'
+        result = subprocess.run(['ip', version, 'rule', 'show'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining(3))
+        path['policy_rules'] = result.stdout.decode('ascii', 'replace')[:8192]
+        if result.returncode:
+            path['risks'].append('Не удалось проверить ip rule')
+        defaults = subprocess.run(['ip', version, 'route', 'show', 'table', 'main', 'default'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining(3))
+        devices = re.findall(r'\bdev\s+(\S+)', defaults.stdout.decode('ascii', 'replace'))
+        dev = marked.get('interface', '')
+        tunnel = bool(re.match(r'(?:tun|tap|wg|sstp|pptp|l2tp|ipsec|gre|sit|ip6tnl|tailscale|mihomo|clash|lo|br)', dev, re.I)) or os.path.exists('/sys/class/net/' + dev + '/tun_flags')
+        if dev:
+            link = subprocess.run(['ip', '-details', 'link', 'show', 'dev', dev], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining(2))
+            link_text = link.stdout.decode('ascii', 'replace')
+            if link.returncode or re.search(r'\b(?:wireguard|vxlan|ipip|ip6tnl|vti|vti6|gretap|gre|tun|tap|sit|xfrm)\b', link_text, re.I):
+                tunnel = True
+            physical = os.path.exists('/sys/class/net/' + dev + '/device') or bool(re.fullmatch(r'(?:eth|en|wan|wwan|ptm|atm)[A-Za-z0-9_.:-]*', dev))
+            if not physical and ' vlan ' not in link_text:
+                path['risks'].append('Тип WAN не подтверждён как физический/операторский: ' + dev)
+        if not dev or dev not in devices or tunnel:
+            path['risks'].append('Маршрут не подтверждён как прямой WAN: ' + (dev or 'интерфейс не найден'))
+        else:
+            WAN_INTERFACE = dev
+            path['interface'] = dev
+        source = marked.get('source', '')
+        path['source'] = source
+        if source:
+            check = route(ip, source=source)
+            path['source_route'] = check
+            if check.get('interface') != dev or not check.get('ok'):
+                path['risks'].append('Маршрут с исходным адресом отличается от ожидаемого WAN')
+        else:
+            path['risks'].append('Исходный адрес не определён')
+    except (OSError, subprocess.TimeoutExpired):
+        path['risks'].append('Не удалось полностью проверить маршрутизацию')
+    path['direct_ready'] = path['direct_ready'] and not path['risks']
+    path['status'] = 'DIRECT' if path['direct_ready'] else 'DIRECT_PATH_UNVERIFIED'
+    return marked
+
+
+def filter_candidates(ip, text, source='', interface=''):
+    rows = [shlex.split(line) for line in text.splitlines() if line.startswith('-A ')]
+    graph = {}
+    for row in rows:
+        target = jump_target(row)
+        if target:
+            graph.setdefault(row[1], set()).add(target)
+    results = []
+    for root in ('OUTPUT', 'INPUT'):
+        reachable = {root}
+        for _ in range(64):
+            expanded = reachable | set().union(*(graph.get(chain, set()) for chain in reachable))
+            if expanded == reachable:
+                break
+            reachable = expanded
+        if any(not graph.get(chain, set()).issubset(reachable) for chain in reachable):
+            results.append({'direction': root, 'protocol': 'all', 'ports': '*', 'potential': True, 'rule': 'Граф цепочек слишком глубокий; полный аудит не подтверждён'})
+        incoming = root == 'INPUT'
+        for row in rows:
+            if row[1] not in reachable or jump_target(row) not in ('DROP', 'REJECT'):
+                continue
+            matches = True
+            for flag, address in (('-s', ip if incoming else source), ('-d', source if incoming else ip)):
+                if flag in row and address:
+                    index = row.index(flag)
+                    try:
+                        included = ipaddress.ip_address(address) in ipaddress.ip_network(row[index + 1], strict=False)
+                    except (ValueError, IndexError):
+                        continue
+                    if index and row[index - 1] == '!':
+                        included = not included
+                    if not included:
+                        matches = False
+            direction = '-i' if incoming else '-o'
+            if direction in row and interface:
+                value = row[row.index(direction) + 1]
+                included = interface.startswith(value[:-1]) if value.endswith('+') else interface == value
+                if row.index(direction) and row[row.index(direction) - 1] == '!':
+                    included = not included
+                if not included:
+                    matches = False
+            for flag in ('--ctstate', '--state'):
+                if flag in row and not (row.index(flag) > 0 and row[row.index(flag) - 1] == '!') and not set(row[row.index(flag) + 1].split(',')) & {'NEW', 'ESTABLISHED', 'UNTRACKED'}:
+                    matches = False
+            if not matches:
+                continue
+            port_flag = '--sport' if incoming else '--dport'
+            multi_flag = '--sports' if incoming else '--dports'
+            ports = row[row.index(port_flag) + 1] if port_flag in row else row[row.index(multi_flag) + 1] if multi_flag in row else '*'
+            selected_flag = port_flag if port_flag in row else multi_flag if multi_flag in row else None
+            results.append({'direction': root, 'chain': row[1], 'action': jump_target(row), 'protocol': row[row.index('-p') + 1] if '-p' in row else 'all', 'protocol_negated': '-p' in row and row.index('-p') > 0 and row[row.index('-p') - 1] == '!', 'ports': ports, 'ports_negated': bool(selected_flag and row.index(selected_flag) > 0 and row[row.index(selected_flag) - 1] == '!'), 'potential': True, 'rule': clean(' '.join(row))})
+        if re.search(r'^:' + root + r'\s+DROP\b', text, re.M):
+            results.append({'direction': root, 'chain': root, 'action': 'DROP', 'protocol': 'all', 'ports': '*', 'potential': True, 'rule': 'Политика ' + root + ' DROP; достижимость зависит от разрешающих правил'})
+    if len(results) > 32:
+        return results[:31] + [{'direction': 'UNKNOWN', 'protocol': 'all', 'ports': '*', 'potential': True, 'rule': 'Список правил сокращён; полный аудит не подтверждён'}]
+    return results
+
+
+def inspect_filter(ip, path):
+    binary = 'ip6tables-save' if family(ip) == socket.AF_INET6 else 'iptables-save'
+    try:
+        response = subprocess.run([binary, '-t', 'filter'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining(2))
+        if response.returncode:
+            raise OSError('Не удалось прочитать filter')
+        if len(response.stdout) > 1048576:
+            raise ValueError('Таблица filter слишком большая для полного аудита')
+        return {'status': 'OK', 'candidates': filter_candidates(ip, response.stdout.decode('ascii', 'replace')[:1048576], path.get('source', ''), path.get('interface', ''))}
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'UNKNOWN', 'candidates': [], 'detail': clean(str(exc))[:100]}
+
+
+def filter_affects(candidate, port):
+    protocol_matches = candidate.get('protocol') in ('all', 'tcp', '0', '6')
+    if candidate.get('protocol_negated'):
+        protocol_matches = not protocol_matches
+    if not protocol_matches:
+        return False
+    ports = candidate.get('ports', '*')
+    if ports == '*':
+        return True
+    for value in ports.split(','):
+        try:
+            if ':' in value:
+                start, end = value.split(':', 1)
+                if int(start or 0) <= port <= int(end or 65535):
+                    return not candidate.get('ports_negated', False)
+            elif int(value) == port:
+                return not candidate.get('ports_negated', False)
+        except ValueError:
+            return True
+    return candidate.get('ports_negated', False)
+
+
+def prepare_socket(sock, direct=True):
+    try:
+        if direct and BYPASS_MARK:
+            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, 'SO_MARK', 36), BYPASS_MARK)
+        if direct and WAN_INTERFACE:
+            sock.setsockopt(socket.SOL_SOCKET, getattr(socket, 'SO_BINDTODEVICE', 25), WAN_INTERFACE.encode('ascii') + b'\0')
+    except OSError as exc:
+        raise OSError(errno.ENOTSUP, 'Не удалось задать метку/интерфейс прямой пробы') from exc
+    return sock
+
+
+def connect(ip, port, timeout):
+    if CANCEL.is_set():
+        raise OSError(errno.ECANCELED, 'Проверка отменена')
+    deadline = min(END_TIME, time.monotonic() + timeout)
+    sock = socket.socket(family(ip), socket.SOCK_STREAM)
+    with SOCKET_LOCK:
+        ACTIVE_SOCKETS.add(sock)
+    guard = None
+    try:
+        prepare_socket(sock)
+        sock.settimeout(remaining(timeout))
+        sock.bind(('::' if family(ip) == socket.AF_INET6 else '0.0.0.0', 0))
+        guard = FlowGuard(ip, 'tcp', sock.getsockname()[1], port)
+        if deadline - time.monotonic() <= 0:
+            raise OSError(errno.ENOTSUP, 'Время подготовки прямой TCP-пробы исчерпано')
+        sock.settimeout(remaining(deadline - time.monotonic()))
+        started = time.monotonic()
+        sock.connect((ip, port))
+        with SOCKET_LOCK:
+            ACTIVE_SOCKETS.add(sock)
+        return sock, (time.monotonic() - started) * 1000, guard
+    except BaseException:
+        sock.close()
+        if guard:
+            guard.close()
+        raise
+
+
+def clean(value):
+    return ''.join(c if not unicodedata.category(c).startswith('C') else '?' for c in str(value))[:500]
+
+
+def paint(value, color='36;1'):
+    value = clean(value)
+    return '\033[' + color + 'm' + value + '\033[0m' if COLOR else value
+
+
+def progress(value):
+    if sys.stdout.isatty():
+        print('\r\033[2K' + clean(value), end='', flush=True)
+
+
+def width(value):
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('F', 'W') else 1 for c in value)
+
+
+def wrap(value, limit):
+    lines = []
+    for paragraph in str(value).split('\n'):
+        part = ''
+        for char in clean(paragraph):
+            if part and width(part + char) > limit:
+                lines.append(part)
+                part = ''
+            part += char
+        lines.append(part)
+    return lines
+
+
+def fit(value, limit):
+    value = clean(str(value).replace('\n', ' '))
+    if width(value) <= limit:
+        return value
+    text = ''
+    for char in value:
+        if width(text + char) > limit - 1:
+            break
+        text += char
+    return text.rstrip() + '…'
+
+
+def table(headers, rows, sizes, compact=False):
+    def border(left, middle, right, horizontal='─'):
+        print(paint(left + middle.join(horizontal * (n + 2) for n in sizes) + right, '90'))
+
+    def row(values, color):
+        pieces = [[fit(value, size)] if compact else wrap(value, size) for value, size in zip(values, sizes)]
+        for line in range(max(map(len, pieces))):
+            cells = []
+            for i, part in enumerate(pieces):
+                text = part[line] if line < len(part) else ''
+                text += ' ' * (sizes[i] - width(text))
+                cell_color = color[i] if isinstance(color, (list, tuple)) else color if i else '36;1'
+                cells.append(' ' + paint(text, cell_color) + ' ')
+            print('│' + '│'.join(cells) + '│')
+    border('┌', '┬', '┐')
+    row(headers, '37;1')
+    border('╞', '╪', '╡', '═')
+    for values, color in rows:
+        row(values, color)
+    border('└', '┴', '┘')
+
+
+def family(ip):
+    return socket.AF_INET6 if ipaddress.ip_address(ip).version == 6 else socket.AF_INET
+
+
+def checksum(data):
+    if len(data) % 2:
+        data += b'\0'
+    total = sum(struct.unpack('!' + 'H' * (len(data) // 2), data))
+    while total >> 16:
+        total = (total & 65535) + (total >> 16)
+    return ~total & 65535
+
+
+def network_error(exc):
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return 'TIMEOUT'
+    return {errno.ECONNREFUSED: 'REFUSED', errno.ENETUNREACH: 'NO ROUTE', errno.EHOSTUNREACH: 'HOST UNREACH', errno.EACCES: 'PROHIBITED', errno.EPERM: 'NO PERMISSION', errno.EMSGSIZE: 'TOO BIG', errno.ECONNRESET: 'RESET', errno.ENOTSUP: 'BYPASS FAIL', errno.ECANCELED: 'CANCELLED'}.get(getattr(exc, 'errno', None), 'NET ERROR')
+
+
+def route(ip, source=''):
+    try:
+        command = ['ip', '-6' if family(ip) == socket.AF_INET6 else '-4', 'route', 'get', ip]
+        if source:
+            command += ['from', source]
+        if BYPASS_MARK:
+            command += ['mark', hex(BYPASS_MARK)]
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=remaining(3))
+        text = process.stdout.decode('utf-8', 'replace').strip().splitlines()
+        text = text[0] if text else process.stderr.decode('utf-8', 'replace').strip()
+        if process.returncode or not text or any(word in text.lower() for word in ('unreachable', 'prohibit', 'blackhole', 'error -')):
+            return {'status': 'NO ROUTE', 'detail': clean(text), 'ok': False}
+        fields = text.split()
+        return {'status': 'OK', 'detail': clean(text), 'ok': True, 'interface': fields[fields.index('dev') + 1] if 'dev' in fields else '', 'source': fields[fields.index('src') + 1] if 'src' in fields else source, 'gateway': fields[fields.index('via') + 1] if 'via' in fields else '', 'mark': BYPASS_MARK}
+    except FileNotFoundError:
+        return {'status': 'UNKNOWN', 'detail': 'Команда ip отсутствует', 'ok': None}
+    except subprocess.TimeoutExpired:
+        return {'status': 'TIMEOUT', 'detail': 'Чтение таблицы маршрутизации', 'ok': None}
+
+
+def icmp_payload(packet, version):
+    if version == 4:
+        if len(packet) < 20 or packet[0] >> 4 != 4:
+            return b''
+        offset = (packet[0] & 15) * 4
+        if offset < 20 or len(packet) < offset + 8:
+            return b''
+        return packet[offset:]
+    return packet if len(packet) >= 8 else b''
+
+
+def quoted_match(data, ip, protocol, source_port, dest_port, sequence):
+    version = ipaddress.ip_address(ip).version
+    if version == 4:
+        if len(data) < 28 or data[0] >> 4 != 4:
+            return False
+        offset = (data[0] & 15) * 4
+        if offset < 20 or len(data) < offset + 8 or data[9] != protocol or data[16:20] != socket.inet_aton(ip) or struct.unpack('!H', data[6:8])[0] & 0x1fff:
+            return False
+    else:
+        if len(data) < 48 or data[0] >> 4 != 6 or data[6] != protocol or data[24:40] != socket.inet_pton(socket.AF_INET6, ip):
+            return False
+        offset = 40
+    payload = data[offset:]
+    if protocol in (1, 58):
+        return struct.unpack('!HH', payload[4:8]) == (source_port, sequence & 65535)
+    if struct.unpack('!HH', payload[:4]) != (source_port, dest_port):
+        return False
+    return protocol != 6 or struct.unpack('!I', payload[4:8])[0] == sequence
+
+
+def icmp_event(packet, peer, ip, protocol, source_port, dest_port, sequence):
+    version = ipaddress.ip_address(ip).version
+    data = icmp_payload(packet, version)
+    if len(data) < 8:
+        return None
+    kind, code = data[:2]
+    echo_reply = 0 if version == 4 else 129
+    if kind == echo_reply and protocol in (1, 58) and peer == ip and struct.unpack('!HH', data[4:8]) == (source_port, sequence & 65535):
+        return {'status': 'ECHO REPLY', 'reached': True, 'ip': peer}
+    errors = (3, 11, 12) if version == 4 else (1, 2, 3, 4)
+    if kind not in errors or not quoted_match(data[8:], ip, protocol, source_port, dest_port, sequence):
+        return None
+    prohibited = version == 4 and kind == 3 and code in (9, 10, 13) or version == 6 and kind == 1 and code == 1
+    too_big = version == 4 and kind == 3 and code == 4 or version == 6 and kind == 2
+    expired = kind == (11 if version == 4 else 3)
+    port_closed = version == 4 and kind == 3 and code == 3 or version == 6 and kind == 1 and code == 4
+    status = 'PROHIBITED' if prohibited else 'TOO BIG' if too_big else 'TTL EXCEEDED' if expired else 'PORT CLOSED' if port_closed else 'NETWORK UNREACHABLE' if version == 4 and kind == 3 and code == 0 else 'HOST UNREACHABLE' if version == 4 and kind == 3 and code == 1 else 'UNREACHABLE'
+    result = {'status': status, 'reached': peer == ip and port_closed, 'ip': peer, 'code': code}
+    if too_big:
+        result['mtu'] = struct.unpack('!H', data[6:8])[0] if version == 4 else struct.unpack('!I', data[4:8])[0]
+    return result
+
+
+def echo(ip, size=56, count=3, df=False, timeout=2):
+    version = ipaddress.ip_address(ip).version
+    protocol = socket.IPPROTO_ICMP if version == 4 else socket.IPPROTO_ICMPV6
+    ident = secrets.randbelow(65535) + 1
+    result = {'status': 'TIMEOUT', 'sent': 0, 'received': 0, 'rtts': [], 'size': size, 'events': []}
+    try:
+        with socket.socket(family(ip), socket.SOCK_RAW, protocol) as sock:
+            prepare_socket(sock)
+            if df and version == 4:
+                sock.setsockopt(socket.IPPROTO_IP, 10, 2)
+            elif df and version == 6:
+                sock.setsockopt(socket.IPPROTO_IPV6, getattr(socket, 'IPV6_DONTFRAG', 62), 1)
+            for sequence in range(count):
+                if CANCEL.is_set():
+                    break
+                head = struct.pack('!BBHHH', 8 if version == 4 else 128, 0, 0, ident, sequence)
+                data = (b'Xmenu server diagnostic ' * (size // 24 + 2))[:size]
+                packet = head + data
+                if version == 4:
+                    packet = packet[:2] + struct.pack('!H', checksum(packet)) + packet[4:]
+                started = time.monotonic()
+                sock.sendto(packet, (ip, 0))
+                result['sent'] += 1
+                deadline = started + remaining(timeout)
+                while time.monotonic() < deadline:
+                    ready, _, _ = select.select([sock], [], [], max(0, deadline - time.monotonic()))
+                    if not ready:
+                        break
+                    incoming, peer = sock.recvfrom(65535)
+                    event = icmp_event(incoming, peer[0], ip, protocol, ident, 0, sequence)
+                    if not event:
+                        continue
+                    result['events'].append(event)
+                    if event['status'] == 'ECHO REPLY':
+                        result['received'] += 1
+                        result['rtts'].append((time.monotonic() - started) * 1000)
+                    else:
+                        result['status'] = event['status']
+                    break
+        if result['received']:
+            result['status'] = 'OK' if result['received'] == count else 'PARTIAL'
+    except OSError as exc:
+        result['status'] = network_error(exc)
+    values = result['rtts']
+    result.update(min_ms=min(values) if values else None, avg_ms=statistics.mean(values) if values else None, max_ms=max(values) if values else None, loss_percent=100 * (result['sent'] - result['received']) / result['sent'] if result['sent'] else None, unstable=bool(len(values) > 1 and max(values) - min(values) > max(20, min(values) * 2) or 0 < result['received'] < result['sent']))
+    return result
+
+
+def timestamp_reply(data, peer, ip, ident, sequence, original):
+    if peer != ip or len(data) != 20 or data[:2] != b'\x0e\0' or checksum(data) != 0:
+        return None
+    received_ident, received_sequence, echoed, received, transmitted = struct.unpack('!HHIII', data[4:20])
+    if (received_ident, received_sequence, echoed) != (ident, sequence, original):
+        return None
+    return {'status': 'TIMESTAMP REPLY', 'reachable': True, 'received_timestamp': received, 'transmit_timestamp': transmitted}
+
+
+def timestamp_probe(ip, timeout=1):
+    if family(ip) != socket.AF_INET:
+        return {'status': 'SKIPPED', 'reachable': False, 'detail': 'ICMP Timestamp существует только для IPv4'}
+    ident = secrets.randbelow(65535) + 1
+    result = {'status': 'NO REPLY', 'reachable': False, 'attempts': [], 'ms': None}
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP) as sock:
+            prepare_socket(sock)
+            for sequence in range(2):
+                original = int(time.time() * 1000) % 86400000
+                packet = struct.pack('!BBHHHIII', 13, 0, 0, ident, sequence, original, 0, 0)
+                packet = packet[:2] + struct.pack('!H', checksum(packet)) + packet[4:]
+                duration = remaining(timeout)
+                started = time.monotonic()
+                sock.sendto(packet, (ip, 0))
+                deadline = started + duration
+                while time.monotonic() < deadline and not CANCEL.is_set():
+                    ready, _, _ = select.select([sock], [], [], max(0, deadline - time.monotonic()))
+                    if not ready:
+                        break
+                    incoming, peer = sock.recvfrom(65535)
+                    answer = timestamp_reply(icmp_payload(incoming, 4), peer[0], ip, ident, sequence, original)
+                    if answer:
+                        answer['ms'] = (time.monotonic() - started) * 1000
+                        result['attempts'].append(answer)
+                        result.update(answer)
+                        return result
+                result['attempts'].append({'status': 'NO REPLY'})
+        return result
+    except OSError as exc:
+        result['status'] = network_error(exc)
+        return result
+
+
+def tcp(ip, port, timeout=4):
+    guard = None
+    try:
+        sock, elapsed, guard = connect(ip, port, timeout)
+        with sock:
+            return {'status': 'OPEN', 'ms': elapsed, 'port': port, 'source': sock.getsockname()[0], 'peer': sock.getpeername()[0]}
+    except OSError as exc:
+        return {'status': network_error(exc), 'ms': None, 'port': port}
+    finally:
+        if guard:
+            guard.close()
+
+
+def tcp_discovery(ip, port, attempts=2, timeout=2):
+    samples = []
+    for _ in range(attempts):
+        if CANCEL.is_set() or END_TIME - time.monotonic() < .1:
+            break
+        sample = tcp(ip, port, remaining(timeout))
+        sample['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        samples.append(sample)
+        if samples[-1]['status'] in ('OPEN', 'REFUSED', 'NO ROUTE', 'NO PERMISSION', 'BYPASS FAIL'):
+            break
+        if len(samples) < attempts:
+            CANCEL.wait(.15)
+    if not samples:
+        return {'status': 'SKIPPED', 'port_state': 'UNKNOWN', 'ms': None, 'port': port, 'attempts': []}
+    chosen = next((v for v in samples if v['status'] == 'OPEN'), samples[-1])
+    state = {'OPEN': 'OPEN', 'REFUSED': 'CLOSED', 'RESET': 'CLOSED', 'TIMEOUT': 'FILTERED', 'PROHIBITED': 'FILTERED'}.get(chosen['status'], 'ERROR' if chosen['status'] in ('NET ERROR', 'NO PERMISSION', 'BYPASS FAIL') else 'UNKNOWN')
+    return dict(chosen, port_state=state, attempts=samples, unstable=len({s['status'] for s in samples}) > 1)
+
+
+def tcp_recheck(ip, port, previous):
+    samples = []
+    for index in range(3):
+        if index and CANCEL.wait(.75 * index):
+            break
+        if CANCEL.is_set() or END_TIME - time.monotonic() < .1:
+            break
+        value = tcp_discovery(ip, port, 1, 2)
+        samples += value.get('attempts', [])
+        if value['status'] in ('OPEN', 'REFUSED', 'BYPASS FAIL', 'NO PERMISSION'):
+            break
+    if not samples:
+        return dict(previous, external_recheck=False, recheck_incomplete=True)
+    value = dict(samples[-1]) if samples else {'status': 'SKIPPED', 'ms': None, 'port': port, 'port_state': 'UNKNOWN'}
+    value['port_state'] = {'OPEN': 'OPEN', 'REFUSED': 'CLOSED', 'RESET': 'CLOSED', 'TIMEOUT': 'FILTERED', 'PROHIBITED': 'FILTERED'}.get(value['status'], 'UNKNOWN')
+    value['attempts'] = samples
+    history = previous.get('attempts', []) + value.get('attempts', [])
+    value.update(attempts=history[-8:], unstable=len({s['status'] for s in history}) > 1, external_recheck=True)
+    return value
+
+
+def quic_probe_packet():
+    dcid, scid = secrets.token_bytes(8), secrets.token_bytes(8)
+    version = 0x1a2a3a4a
+    header = b'\xc0' + struct.pack('!I', version) + bytes([len(dcid)]) + dcid + bytes([len(scid)]) + scid
+    return header + secrets.token_bytes(1200 - len(header)), dcid, scid, version
+
+
+def quic_versions(data, dcid, scid, version):
+    if len(data) < 7 or not data[0] & 0x80 or data[1:5] != b'\0\0\0\0':
+        return None
+    offset = 5
+    length = data[offset]
+    offset += 1
+    destination = data[offset:offset + length]
+    offset += length
+    if offset >= len(data):
+        return None
+    length = data[offset]
+    offset += 1
+    source = data[offset:offset + length]
+    offset += length
+    tail = data[offset:]
+    if destination != scid or source != dcid or not tail or len(tail) % 4:
+        return None
+    versions = [struct.unpack('!I', tail[i:i + 4])[0] for i in range(0, len(tail), 4)]
+    if 0 in versions or version in versions:
+        return None
+    return versions
+
+
+def udp(ip, port, timeout=3, quic=None):
+    started = time.monotonic()
+    guard = None
+    try:
+        with socket.socket(family(ip), socket.SOCK_DGRAM) as sock:
+            prepare_socket(sock)
+            sock.settimeout(remaining(timeout))
+            sock.bind(('::' if family(ip) == socket.AF_INET6 else '0.0.0.0', 0))
+            guard = FlowGuard(ip, 'udp', sock.getsockname()[1], port)
+            sock.connect((ip, port))
+            started = time.monotonic()
+            if not (port == 443 if quic is None else quic):
+                sock.send(b'Xmenu connectivity probe\r\n')
+                data = sock.recv(2048)
+                return {'status': 'REPLY', 'ms': (time.monotonic() - started) * 1000, 'port': port, 'bytes': len(data), 'reachable': True}
+            packet, dcid, scid, version = quic_probe_packet()
+            deadline = started + remaining(timeout)
+            attempts = 0
+            while attempts < 3 and time.monotonic() < deadline:
+                if CANCEL.is_set():
+                    raise OSError(errno.ECANCELED, 'Проверка отменена')
+                sent = time.monotonic()
+                sock.send(packet)
+                attempts += 1
+                window = min(deadline, sent + .666 * 2 ** (attempts - 1))
+                while time.monotonic() < window:
+                    sock.settimeout(max(.001, window - time.monotonic()))
+                    try:
+                        data = sock.recv(2048)
+                    except (TimeoutError, socket.timeout):
+                        break
+                    versions = quic_versions(data, dcid, scid, version)
+                    if versions:
+                        return {'status': 'QUIC VN', 'ms': (time.monotonic() - sent) * 1000 if attempts == 1 else None, 'attempts': attempts, 'port': port, 'reachable': True, 'versions': versions, 'detail': 'UDP/443 отвечает на QUIC-пробу; полный QUIC/TLS-сеанс не проверялся'}
+                    if data[1:5] != b'\0\0\0\0' or not data or not data[0] & 0x80:
+                        return {'status': 'REPLY', 'ms': (time.monotonic() - sent) * 1000 if attempts == 1 else None, 'attempts': attempts, 'port': port, 'reachable': True, 'detail': 'Получен UDP-ответ; протокол QUIC не подтвержден'}
+            return {'status': 'NO REPLY', 'ms': None, 'port': port, 'reachable': False, 'detail': 'Нет ответа на QUIC-пробы. Отсутствие QUIC-сервиса и фильтрация не различимы'}
+    except OSError as exc:
+        return {'status': 'NO REPLY' if isinstance(exc, (TimeoutError, socket.timeout)) else 'PORT CLOSED' if getattr(exc, 'errno', None) == errno.ECONNREFUSED else network_error(exc), 'ms': None, 'port': port}
+    finally:
+        if guard:
+            guard.close()
+
+
+def ssh_banner(ip, port=22):
+    guard = None
+    connected = False
+    try:
+        sock, elapsed, guard = connect(ip, port, 4)
+        connected = True
+        with sock:
+            sock.settimeout(remaining(3))
+            data = sock.recv(512)
+            text = clean(data.split(b'\n', 1)[0].decode('ascii', 'replace')).strip()
+            return {'status': 'SSH' if text.startswith('SSH-') else 'REPLY' if data else 'EOF', 'detail': text, 'tcp_open': True}
+    except OSError as exc:
+        return {'status': network_error(exc), 'detail': '', 'tcp_open': connected}
+    finally:
+        if guard:
+            guard.close()
+
+
+def banner_probe(ip, port):
+    guard = None
+    connected = False
+    try:
+        sock, elapsed, guard = connect(ip, port, remaining(2))
+        connected = True
+        with sock:
+            sock.settimeout(remaining(1))
+            data = sock.recv(256)
+            line = clean(data.split(b'\n', 1)[0].decode('ascii', 'replace')).strip()
+            protocol = 'SSH' if line.startswith('SSH-') else 'SMTP' if line.startswith('220') and 'SMTP' in line.upper() else 'FTP' if line.startswith('220') and 'FTP' in line.upper() else 'HTTP' if line.startswith('HTTP/') else 'UNKNOWN'
+            return {'status': 'BANNER REPLY' if data else 'EOF', 'tcp_open': True, 'protocol': protocol, 'banner': line, 'ms': elapsed, 'port': port}
+    except OSError as exc:
+        return {'status': network_error(exc), 'tcp_open': connected, 'protocol': 'UNKNOWN', 'port': port}
+    finally:
+        if guard:
+            guard.close()
+
+
+def http_probe(ip, port, secure=False, sni=''):
+    sock = None
+    guard = None
+    stage = 'TCP'
+    try:
+        sock, elapsed, guard = connect(ip, port, 4)
+        sock.settimeout(remaining(5))
+        if secure:
+            stage = 'TLS'
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=sni or ip)
+            with SOCKET_LOCK:
+                ACTIVE_SOCKETS.add(sock)
+        stage = 'HTTP'
+        host = sni or ('[' + ip + ']' if family(ip) == socket.AF_INET6 else ip)
+        sock.settimeout(remaining(5))
+        sock.sendall(('HEAD / HTTP/1.1\r\nHost: ' + host + '\r\nConnection: close\r\n\r\n').encode('ascii'))
+        data = sock.recv(4096)
+        match = re.match(rb'HTTP/\d(?:\.\d)?\s+(\d{3})', data)
+        return {'status': 'HTTP ' + match[1].decode() if match else 'REPLY' if data else 'EOF', 'detail': 'TLS проверен' if secure else 'Сервер ответил без TLS', 'reachable': bool(data)}
+    except ssl.SSLCertVerificationError:
+        return {'status': 'TLS CERT', 'detail': 'TLS отвечает; сертификат не подтверждён для ' + (sni or 'IP'), 'reachable': True}
+    except ssl.SSLError as exc:
+        return {'status': 'TLS ALERT' if 'alert' in str(exc).lower() else 'TLS ERROR', 'detail': clean(str(exc))[:80], 'reachable': False}
+    except OSError as exc:
+        error = network_error(exc)
+        return {'status': 'TLS DROP' if stage == 'TLS' and error == 'TIMEOUT' else error, 'detail': 'Этап: ' + stage, 'reachable': False}
+    finally:
+        if sock:
+            sock.close()
+        if guard:
+            guard.close()
+
+
+def tcp_packet(source, target, source_port, dest_port, sequence):
+    header = struct.pack('!HHIIBBHHH', source_port, dest_port, sequence, 0, 5 << 4, 2, 64240, 0, 0)
+    version = ipaddress.ip_address(target).version
+    if version == 4:
+        pseudo = socket.inet_aton(source) + socket.inet_aton(target) + struct.pack('!BBH', 0, 6, len(header))
+    else:
+        pseudo = socket.inet_pton(socket.AF_INET6, source) + socket.inet_pton(socket.AF_INET6, target) + struct.pack('!I3xB', len(header), 6)
+    return header[:16] + struct.pack('!H', checksum(pseudo + header)) + header[18:]
+
+
+def tcp_event(data, peer, ip, source_port, dest_port, sequence):
+    if peer != ip:
+        return None
+    if family(ip) == socket.AF_INET:
+        if len(data) < 40 or data[0] >> 4 != 4:
+            return None
+        offset = (data[0] & 15) * 4
+        if offset < 20 or len(data) < offset + 20:
+            return None
+        data = data[offset:]
+    if len(data) < 20:
+        return None
+    sport, dport, seq, ack = struct.unpack('!HHII', data[:12])
+    if (sport, dport, ack) != (dest_port, source_port, (sequence + 1) & 0xffffffff):
+        return None
+    flags = data[13]
+    if flags & 4:
+        return {'status': 'RST', 'reached': True, 'ip': peer}
+    if flags & 0x12 == 0x12:
+        return {'status': 'SYN/ACK', 'reached': True, 'ip': peer}
+    return None
+
+
+def trace(ip, mode, hops=24, port=443, timeout=1, start_ttl=1):
+    version = ipaddress.ip_address(ip).version
+    icmp_protocol = socket.IPPROTO_ICMP if version == 4 else socket.IPPROTO_ICMPV6
+    protocol = icmp_protocol if mode == 'ICMP' else 17 if mode == 'UDP' else 6
+    source_port = secrets.randbelow(20000) + 40000
+    seq_base = secrets.randbelow(0xffff0000)
+    result = {'mode': mode, 'hops': [], 'reached': False, 'status': 'NO REPLY'}
+    sender = receiver = tcp_receiver = reservation = guard = None
+    try:
+        with socket.socket(family(ip), socket.SOCK_DGRAM) as local:
+            prepare_socket(local)
+            local.connect((ip, port))
+            source = local.getsockname()[0]
+        receiver = socket.socket(family(ip), socket.SOCK_RAW, icmp_protocol)
+        if mode == 'ICMP':
+            sender = socket.socket(family(ip), socket.SOCK_RAW, icmp_protocol)
+        elif mode == 'UDP':
+            sender = socket.socket(family(ip), socket.SOCK_DGRAM)
+            sender.bind((source, 0))
+            source_port = sender.getsockname()[1]
+        else:
+            reservation = socket.socket(family(ip), socket.SOCK_STREAM)
+            reservation.bind((source, 0))
+            source_port = reservation.getsockname()[1]
+            guard = FlowGuard(ip, 'tcp', source_port, port)
+            sender = socket.socket(family(ip), socket.SOCK_RAW, socket.IPPROTO_TCP)
+            sender.bind((source, 0))
+            tcp_receiver = socket.socket(family(ip), socket.SOCK_RAW, socket.IPPROTO_TCP)
+        prepare_socket(sender)
+        watches = [receiver] + ([tcp_receiver] if tcp_receiver else [])
+        for ttl in range(start_ttl, hops + 1):
+            if CANCEL.is_set():
+                result['status'] = 'CANCELLED'
+                break
+            sender.setsockopt(socket.IPPROTO_IP if version == 4 else socket.IPPROTO_IPV6, socket.IP_TTL if version == 4 else socket.IPV6_UNICAST_HOPS, ttl)
+            sequence = (seq_base + ttl) & 0xffffffff
+            dest_port = 33434 + ttl if mode == 'UDP' else port
+            if mode == 'ICMP':
+                packet = struct.pack('!BBHHH', 8 if version == 4 else 128, 0, 0, source_port, sequence & 65535) + b'Xmenu trace'
+                if version == 4:
+                    packet = packet[:2] + struct.pack('!H', checksum(packet)) + packet[4:]
+            elif mode == 'UDP':
+                packet = b'Xmenu trace'
+            else:
+                packet = tcp_packet(source, ip, source_port, port, sequence)
+            started = time.monotonic()
+            sender.sendto(packet, (ip, dest_port if mode == 'UDP' else 0))
+            event = None
+            deadline = started + remaining(timeout)
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select(watches, [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    break
+                for sock in ready:
+                    data, peer = sock.recvfrom(65535)
+                    event = tcp_event(data, peer[0], ip, source_port, port, sequence) if sock is tcp_receiver else icmp_event(data, peer[0], ip, protocol, source_port, dest_port, sequence)
+                    if event:
+                        break
+                if event:
+                    break
+            if event:
+                event.update(ttl=ttl, ms=(time.monotonic() - started) * 1000)
+                result['hops'].append(event)
+                if event['reached'] or event['status'] in ('PROHIBITED', 'UNREACHABLE', 'NETWORK UNREACHABLE', 'HOST UNREACHABLE'):
+                    result.update(reached=event['reached'], status=event['status'])
+                    break
+            else:
+                result['hops'].append({'ttl': ttl, 'ip': '', 'ms': None, 'status': '*', 'reached': False})
+        return result
+    except OSError as exc:
+        result['status'] = network_error(exc)
+        return result
+    finally:
+        for sock in (sender, receiver, tcp_receiver, reservation):
+            if sock:
+                sock.close()
+        if guard:
+            guard.close()
+
+
+def syn_probe(ip, port):
+    value = trace(ip, 'TCP', 64, port, 1.5, start_ttl=64)
+    state = {'SYN/ACK': 'OPEN', 'RST': 'CLOSED', 'PROHIBITED': 'FILTERED', 'NO REPLY': 'FILTERED', 'NO PERMISSION': 'SKIPPED'}.get(value['status'], 'UNKNOWN')
+    return {'status': value['status'], 'port_state': state, 'port': port, 'hops': value['hops']}
+
+
+def parse_stun(data, transaction):
+    if len(data) < 20 or len(transaction) != 12:
+        return None
+    kind, size, cookie = struct.unpack('!HHI', data[:8])
+    if kind not in (0x0101, 0x0111) or cookie != 0x2112a442 or data[8:20] != transaction or size % 4 or len(data) != size + 20:
+        return None
+    result = {'status': 'STUN REPLY', 'reachable': True}
+    offset = 20
+    while offset < len(data):
+        if offset + 4 > len(data):
+            return None
+        attribute, length = struct.unpack('!HH', data[offset:offset + 4])
+        end = offset + 4 + length
+        if end > len(data):
+            return None
+        value = data[offset + 4:end]
+        if attribute == 0x0020:
+            if len(value) not in (8, 20) or value[0] != 0 or (value[1], len(value)) not in ((1, 8), (2, 20)):
+                return None
+            mask = struct.pack('!I', cookie) + transaction
+            decoded = bytes(a ^ b for a, b in zip(value[4:], mask))
+            result['mapped_address'] = socket.inet_ntop(socket.AF_INET if value[1] == 1 else socket.AF_INET6, decoded)
+            result['mapped_port'] = struct.unpack('!H', value[2:4])[0] ^ 0x2112
+        elif attribute == 9:
+            if len(value) < 4 or value[:2] != b'\0\0' or value[2] & 0xf8 or not 300 <= value[2] * 100 + value[3] <= 699 or value[3] > 99:
+                return None
+            result['error_code'] = value[2] * 100 + value[3]
+        elif attribute == 0x8028:
+            if length != 4 or end != len(data) or struct.unpack('!I', value)[0] != (zlib.crc32(data[:offset]) ^ 0x5354554e):
+                return None
+        offset = end + (-length % 4)
+    if offset != len(data) or kind == 0x0101 and 'mapped_address' not in result or kind == 0x0111 and 'error_code' not in result:
+        return None
+    return result
+
+
+def stun_probe(ip, port=3478, timeout=2):
+    transaction = secrets.token_bytes(12)
+    packet = struct.pack('!HHI', 1, 0, 0x2112a442) + transaction
+    guard = None
+    try:
+        with socket.socket(family(ip), socket.SOCK_DGRAM) as sock:
+            prepare_socket(sock)
+            sock.bind(('::' if family(ip) == socket.AF_INET6 else '0.0.0.0', 0))
+            guard = FlowGuard(ip, 'udp', sock.getsockname()[1], port)
+            sock.connect((ip, port))
+            deadline = time.monotonic() + remaining(timeout)
+            started = time.monotonic()
+            sock.send(packet)
+            while time.monotonic() < deadline:
+                sock.settimeout(remaining(max(.001, deadline - time.monotonic())))
+                answer = parse_stun(sock.recv(2048), transaction)
+                if answer:
+                    return dict(answer, ms=(time.monotonic() - started) * 1000, port=port, port_state='OPEN', detail='STUN ответил' + ('; код ' + str(answer['error_code']) if 'error_code' in answer else ''))
+            raise TimeoutError()
+    except OSError as exc:
+        status = 'PORT CLOSED' if getattr(exc, 'errno', None) == errno.ECONNREFUSED else 'NO REPLY' if isinstance(exc, TimeoutError) else network_error(exc)
+        return {'status': status, 'port_state': 'CLOSED' if status == 'PORT CLOSED' else 'OPEN_FILTERED' if status == 'NO REPLY' else 'UNKNOWN', 'reachable': False, 'ms': None, 'port': port, 'detail': 'STUN-сервис не подтвердил ответ'}
+    finally:
+        if guard:
+            guard.close()
+
+
+def udp_service(ip, port, timeout=2):
+    if port == 3478:
+        return stun_probe(ip, port, timeout)
+    if port == 443:
+        value = udp(ip, port, remaining(timeout))
+        value['port_state'] = 'OPEN' if value.get('reachable') else 'CLOSED' if value['status'] == 'PORT CLOSED' else 'OPEN_FILTERED' if value['status'] == 'NO REPLY' else 'UNKNOWN'
+        return value
+    if port not in (53, 123):
+        return {'status': 'INCONCLUSIVE', 'port_state': 'UNKNOWN', 'port': port, 'ms': None, 'detail': 'Без параметров IKE/WireGuard достоверная протокольная проба невозможна', 'reachable': False}
+    guard = None
+    transaction = secrets.token_bytes(2)
+    ntp_stamp = secrets.token_bytes(8)
+    packet = transaction + b'\x01\0\0\x01\0\0\0\0\0\0\0\0\x02\0\x01' if port == 53 else b'\x23' + b'\0' * 39 + ntp_stamp
+    try:
+        with socket.socket(family(ip), socket.SOCK_DGRAM) as sock:
+            prepare_socket(sock)
+            sock.settimeout(remaining(timeout))
+            sock.bind(('::' if family(ip) == socket.AF_INET6 else '0.0.0.0', 0))
+            guard = FlowGuard(ip, 'udp', sock.getsockname()[1], port)
+            sock.connect((ip, port))
+            started = time.monotonic()
+            sock.send(packet)
+            deadline = started + remaining(timeout)
+            while time.monotonic() < deadline:
+                sock.settimeout(remaining(max(.001, deadline - time.monotonic())))
+                data = sock.recv(2048)
+                valid = len(data) >= 12 and data[:2] == transaction and bool(data[2] & 128) and data[2] & 0x78 == 0 if port == 53 else len(data) >= 48 and data[0] & 7 == 4 and data[24:32] == ntp_stamp and data[1] <= 15
+                if valid:
+                    return {'status': 'REPLY', 'port_state': 'OPEN', 'port': port, 'ms': (time.monotonic() - started) * 1000, 'reachable': True, 'detail': 'Подтверждён ответ DNS' if port == 53 else 'Подтверждён ответ NTP'}
+            raise socket.timeout()
+    except OSError as exc:
+        status = 'PORT CLOSED' if getattr(exc, 'errno', None) == errno.ECONNREFUSED else 'NO REPLY' if isinstance(exc, TimeoutError) else network_error(exc)
+        return {'status': status, 'port_state': 'CLOSED' if status == 'PORT CLOSED' else 'OPEN_FILTERED' if status == 'NO REPLY' else 'UNKNOWN', 'port': port, 'ms': None, 'reachable': False, 'detail': 'ICMP: порт недоступен' if status == 'PORT CLOSED' else 'Нет подтверждённого ответа; UDP-сервис может отсутствовать'}
+    finally:
+        if guard:
+            guard.close()
+
+
+def tls_probe(ip, port, version, timeout=2):
+    sock = guard = None
+    connected = False
+    started = time.monotonic()
+    try:
+        sock, elapsed, guard = connect(ip, port, remaining(timeout))
+        connected = True
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        context.minimum_version = context.maximum_version = version
+        sock.settimeout(remaining(timeout))
+        sock = context.wrap_socket(sock, server_hostname=None)
+        with SOCKET_LOCK:
+            ACTIVE_SOCKETS.add(sock)
+        return {'status': 'TLS OK', 'tcp_open': True, 'protocol': sock.version(), 'ms': (time.monotonic() - started) * 1000, 'detail': 'Handshake без SNI; подлинность сертификата этой пробой не проверяется'}
+    except ssl.SSLError as exc:
+        if CANCEL.is_set() or time.monotonic() >= END_TIME:
+            return {'status': 'CANCELLED', 'tcp_open': connected, 'detail': 'TLS-проверка остановлена'}
+        return {'status': 'PROTOCOL_FAILURE', 'tcp_open': connected, 'error': 'TLS ALERT' if 'alert' in str(exc).lower() else 'TLS ERROR', 'detail': clean(str(exc))[:120]}
+    except OSError as exc:
+        if getattr(exc, 'errno', None) == errno.ECANCELED or CANCEL.is_set() or time.monotonic() >= END_TIME:
+            return {'status': 'CANCELLED', 'tcp_open': connected, 'detail': 'TLS-проверка остановлена'}
+        return {'status': 'PROTOCOL_FAILURE' if connected else network_error(exc), 'tcp_open': connected, 'error': network_error(exc), 'phase': 'TLS ClientHello' if connected else 'TCP Connect', 'reset_after_connect': connected and getattr(exc, 'errno', None) == errno.ECONNRESET, 'detail': 'Ошибка после TCP Connect' if connected else 'TCP Connect не установлен'}
+    finally:
+        if sock:
+            sock.close()
+        if guard:
+            guard.close()
+
+
+def tls_confirm(ip, port, version):
+    first = tls_probe(ip, port, version)
+    if first['status'] != 'PROTOCOL_FAILURE' or END_TIME - time.monotonic() < 2 or CANCEL.is_set():
+        return dict(first, attempts=[first])
+    second = tls_probe(ip, port, version)
+    return dict(second, attempts=[first, second], unstable=first['status'] != second['status'])
+
+
+class ApiHTTPError(OSError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__('HTTP API ' + str(status))
+
+
+def fetch_json(url, timeout=6, payload=None):
+    parsed = urllib.parse.urlsplit(url)
+    timeout = remaining(timeout)
+    call_deadline = min(END_TIME, time.monotonic() + timeout)
+    def budget(limit=timeout):
+        value = min(limit, call_deadline - time.monotonic())
+        if value <= 0:
+            raise TimeoutError('Лимит времени запроса API')
+        return remaining(value)
+    if parsed.scheme != 'https' or parsed.hostname not in ('check-host.net', 'stat.ripe.net', 'api.globalping.io', 'internetdb.shodan.io') or parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.fragment:
+        raise ValueError('Неподдерживаемый API')
+    ip = API_ADDRESSES.get(parsed.hostname)
+    if not ip:
+        lookup = subprocess.run(['nslookup', parsed.hostname], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=budget(3))
+        addresses = []
+        answer = False
+        for line in lookup.stdout.decode('ascii', 'replace').splitlines():
+            if line.startswith(('Name:', 'Non-authoritative answer:')):
+                answer = True
+            if answer and line.startswith('Address'):
+                for value in line.split()[1:]:
+                    try:
+                        address = ipaddress.ip_address(value)
+                        if address.is_global:
+                            addresses.append(address)
+                    except ValueError:
+                        pass
+        if not addresses:
+            raise OSError('DNS API не ответил')
+        ip = str(sorted(addresses, key=lambda item: item.version)[0])
+        API_ADDRESSES[parsed.hostname] = ip
+    sock = guard = timer = response = None
+    try:
+        sock, elapsed, guard = connect(ip, 443, budget(3))
+        sock.settimeout(budget())
+        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parsed.hostname)
+        with SOCKET_LOCK:
+            ACTIVE_SOCKETS.add(sock)
+        def interrupt():
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        timer = threading.Timer(budget(), interrupt)
+        timer.daemon = True
+        timer.start()
+        path = urllib.parse.urlunsplit(('', '', parsed.path or '/', parsed.query, ''))
+        data = json.dumps(payload).encode('utf-8') if payload is not None else b''
+        headers = ('POST' if payload is not None else 'GET') + ' ' + path + ' HTTP/1.1\r\nHost: ' + parsed.hostname + '\r\nAccept: application/json\r\nUser-Agent: Xmenu/1.4.4\r\nConnection: close\r\n'
+        if payload is not None:
+            headers += 'Content-Type: application/json\r\nContent-Length: ' + str(len(data)) + '\r\n'
+        sock.sendall((headers + '\r\n').encode('ascii') + data)
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        if response.status not in (200, 202):
+            raise ApiHTTPError(response.status)
+        data = response.read(1048577)
+        if len(data) > 1048576:
+            raise ValueError('Ответ API слишком большой')
+        try:
+            decoded = json.loads(data)
+        except RecursionError as exc:
+            raise ValueError('Слишком глубокий JSON API') from exc
+        if not isinstance(decoded, dict):
+            raise ValueError('Неверный формат JSON API')
+        return decoded
+    except http.client.HTTPException as exc:
+        raise OSError('Некорректный ответ HTTP API') from exc
+    finally:
+        if timer:
+            timer.cancel()
+        if response:
+            response.close()
+        if sock:
+            sock.close()
+        if guard:
+            guard.close()
+
+
+def parse_discovery(ip, data):
+    if not isinstance(data, dict) or data.get('ip') != ip or not isinstance(data.get('ports'), list) or len(data['ports']) > 256:
+        raise ValueError('Некорректный ответ InternetDB')
+    ports = data['ports']
+    if any(not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 65535 for p in ports):
+        raise ValueError('Некорректный порт InternetDB')
+    hostnames = data.get('hostnames', [])
+    if not isinstance(hostnames, list):
+        raise ValueError('Некорректные имена InternetDB')
+    names = [name for name in hostnames[:16] if isinstance(name, str) and len(name) <= 253 and re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', name) and '..' not in name]
+    return {'status': 'FOUND' if ports else 'NO DATA', 'ports': sorted(set(ports)), 'hostnames': names, 'source': 'Shodan InternetDB', 'historical': True, 'transport': 'unspecified', 'queried_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'detail': 'Исторические наблюдения; доступность проверяется отдельно'}
+
+
+def discover_ports(ip):
+    try:
+        return parse_discovery(ip, fetch_json('https://internetdb.shodan.io/' + urllib.parse.quote(ip, safe=':'), timeout=4))
+    except ApiHTTPError as exc:
+        return {'status': 'NO DATA' if exc.status == 404 else 'API ERROR', 'ports': [], 'detail': 'Нет записи InternetDB' if exc.status == 404 else clean(str(exc))}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'API ERROR', 'ports': [], 'detail': clean(str(exc))[:120]}
+
+
+def discovery_targets(discovery, local):
+    available = [p for p in discovery.get('ports', []) if p not in local or local[p]['status'] == 'SKIPPED']
+    available.sort(key=lambda p: (p in DEFAULT_PORTS, p))
+    chosen = []
+    count = len(local)
+    for port in available:
+        if port not in local:
+            if count >= MAX_TOTAL_PORTS:
+                continue
+            count += 1
+        chosen.append(port)
+        if len(chosen) == MAX_DISCOVERY_PORTS:
+            break
+    return chosen
+
+
+def comparison_ports(ports):
+    values = [443, 22]
+    for port in ports:
+        if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 and port not in values:
+            values.append(port)
+            break
+    return values
+
+
+def bgp(ip):
+    if not ipaddress.ip_address(ip).is_global:
+        return {'status': 'NO DATA', 'detail': 'ASN не подтвержден: адрес не является публичным'}
+    try:
+        network = fetch_json('https://stat.ripe.net/data/network-info/data.json?resource=' + urllib.parse.quote(ip, safe=''))
+        prefix = network.get('data', {}).get('prefix')
+        if not prefix:
+            return {'status': 'NO DATA', 'detail': 'ASN не подтвержден: префикс IP не найден'}
+        prefix = str(ipaddress.ip_network(prefix, strict=True))
+        if ipaddress.ip_address(ip) not in ipaddress.ip_network(prefix):
+            raise ValueError('RIPEstat вернул префикс другого IP')
+        data = fetch_json('https://stat.ripe.net/data/prefix-overview/data.json?resource=' + urllib.parse.quote(prefix, safe='')).get('data', {})
+        announced = data.get('announced')
+        asns = [v for v in data.get('asns', []) if str(v.get('asn', '')).isdigit() and int(v['asn']) > 0]
+        owners = ', '.join('AS' + str(v['asn']) + (' · ' + str(v['holder']) if v.get('holder') else '') for v in asns)
+        detail = prefix + ' · ' + (owners or 'ASN не подтвержден')
+        return {'status': 'ANNOUNCED' if announced is True and asns else 'NOT ANNOUNCED' if announced is False else 'NO DATA', 'detail': clean(detail), 'prefix': prefix, 'asns': [{'asn': int(v['asn']), 'holder': clean(v.get('holder', ''))} for v in asns]}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {'status': 'NO DATA', 'detail': 'ASN не подтвержден: сервис RIPEstat недоступен'}
+
+
+def parse_visibility(data, prefix):
+    if not isinstance(data, dict) or data.get('resource') != prefix:
+        raise ValueError('RIPEstat: неверный ресурс маршрута')
+    version = ipaddress.ip_network(prefix).version
+    visibility = data.get('visibility', {}).get('v' + str(version), {})
+    seen, total = visibility.get('ris_peers_seeing'), visibility.get('total_ris_peers')
+    if any(not isinstance(v, int) or isinstance(v, bool) for v in (seen, total)) or not 0 <= seen <= total or total <= 0:
+        raise ValueError('RIPEstat: некорректные счётчики RIS')
+    observed = data.get('query_time')
+    age = None
+    if isinstance(observed, str):
+        try:
+            stamp = datetime.datetime.fromisoformat(observed.replace('Z', '+00:00'))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+            age = time.time() - stamp.timestamp()
+        except ValueError:
+            observed = None
+    origins = []
+    raw_origins = data.get('origins', [])
+    if not isinstance(raw_origins, list):
+        raise ValueError('RIPEstat: некорректные origin ASN')
+    for value in raw_origins[:32]:
+        raw = value.get('origin') if isinstance(value, dict) else None
+        if isinstance(raw, (str, int)) and not isinstance(raw, bool) and str(raw).isdigit() and 0 < int(raw) <= 4294967295:
+            origins.append(int(raw))
+    stale = age is None or age < -300 or age > 86400
+    return {'status': 'VISIBLE' if seen else 'NOT VISIBLE', 'peers_seen': seen, 'peers_total': total, 'origins': sorted(set(origins)), 'observed_at': observed, 'stale': stale, 'detail': str(seen) + '/' + str(total) + ' RIS-наблюдателей'}
+
+
+def parse_rpki(data, prefix, asn):
+    if not isinstance(data, dict) or str(data.get('resource', '')) not in (str(asn), 'AS' + str(asn)) or data.get('prefix') != prefix:
+        raise ValueError('RIPEstat: RPKI для другого префикса/ASN')
+    state = data.get('status')
+    if state not in ('valid', 'invalid_asn', 'invalid_length', 'unknown'):
+        raise ValueError('RIPEstat: неизвестный статус RPKI')
+    return {'status': 'VALID' if state == 'valid' else 'UNKNOWN' if state == 'unknown' else 'INVALID', 'reason': state, 'prefix': prefix, 'asn': asn}
+
+
+def routing_analysis(ip, network):
+    prefix = network.get('prefix')
+    result = {'status': 'NO DATA', 'visibility': {}, 'rpki': [], 'errors': []}
+    if not prefix:
+        return result
+    try:
+        prefix = str(ipaddress.ip_network(prefix, strict=True))
+        if ipaddress.ip_address(ip) not in ipaddress.ip_network(prefix):
+            raise ValueError('Префикс не содержит проверяемый IP')
+        deadline = min(END_TIME, time.monotonic() + 9)
+        answer = fetch_json('https://stat.ripe.net/data/routing-status/data.json?' + urllib.parse.urlencode({'resource': prefix}), timeout=min(4, remaining(4)))
+        if answer.get('status') not in (None, 'ok'):
+            raise ValueError('RIPEstat routing-status: ошибка API')
+        result['visibility'] = parse_visibility(answer.get('data'), prefix)
+        result['status'] = result['visibility']['status']
+        origins = result['visibility']['origins'][:2]
+        if not origins:
+            origins = [v['asn'] for v in network.get('asns', [])[:2] if isinstance(v, dict) and isinstance(v.get('asn'), int) and not isinstance(v['asn'], bool) and 0 < v['asn'] <= 4294967295]
+        for asn in origins:
+            if deadline - time.monotonic() <= .1 or CANCEL.is_set():
+                break
+            try:
+                answer = fetch_json('https://stat.ripe.net/data/rpki-validation/data.json?' + urllib.parse.urlencode({'resource': asn, 'prefix': prefix}), timeout=min(3, deadline - time.monotonic()))
+                if answer.get('status') not in (None, 'ok'):
+                    raise ValueError('RIPEstat rpki-validation: ошибка API')
+                result['rpki'].append(parse_rpki(answer.get('data'), prefix, asn))
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                result['errors'].append(clean(str(exc))[:120])
+        return result
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:
+        result['errors'].append(clean(str(exc))[:120])
+        return result
+
+
+def remote_value(value, kind, expected_ip=None):
+    if value is None:
+        return 'PENDING', None
+    if kind == 'tcp':
+        records = [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+        good = next((v for v in records if isinstance(v.get('time'), (int, float)) and not isinstance(v['time'], bool) and math.isfinite(v['time']) and 0 <= v['time'] <= 180 and not v.get('error') and (expected_ip is None or v.get('address') == expected_ip)), None)
+        if good:
+            return 'OPEN', good['time'] * 1000
+        error = str(records[0].get('error', 'NO DATA')).lower() if records else 'no data'
+        return ('REFUSED' if 'refused' in error else 'TIMEOUT' if 'timed out' in error else 'API ERROR'), None
+    samples = []
+    def visit(item, depth=0):
+        if isinstance(item, list) and depth < 5:
+            if len(item) >= 2 and item[0] == 'OK' and isinstance(item[1], (int, float)) and not isinstance(item[1], bool) and math.isfinite(item[1]) and 0 <= item[1] <= 180 and (expected_ip is None or len(item) < 3 or item[2] == expected_ip):
+                samples.append(item[1] * 1000)
+            else:
+                for child in item[:16]:
+                    visit(child, depth + 1)
+    visit(value)
+    return ('REPLY', sum(samples) / len(samples)) if samples else ('NO REPLY', None)
+
+
+def globalping(ip, ports, budget=18):
+    rows = []
+    jobs = []
+    total_deadline = min(END_TIME, time.monotonic() + budget)
+    targets = comparison_ports(ports)
+    for kind, port in [('ping', None)] + [('tcp', p) for p in targets]:
+        options = {'packets': 3, 'protocol': 'ICMP' if port is None else 'TCP'}
+        if port is not None:
+            options['port'] = port
+        payload = {'type': 'ping', 'target': ip, 'limit': 3, 'locations': [{'country': 'DE'}, {'country': 'NL'}, {'country': 'US'}], 'measurementOptions': options}
+        try:
+            if total_deadline - time.monotonic() <= 0:
+                break
+            answer = fetch_json('https://api.globalping.io/v1/measurements', min(4, total_deadline - time.monotonic()), payload=payload)
+            ident = answer.get('id', '')
+            if not isinstance(ident, str) or not re.fullmatch('[A-Za-z0-9_-]{1,64}', ident):
+                raise ValueError('Некорректный идентификатор Globalping')
+            jobs.append((kind, port, ident))
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            rows.append({'kind': kind, 'port': port, 'node': 'Globalping', 'status': 'RATE LIMIT' if '429' in str(exc) else 'API ERROR', 'ms': None})
+    answers, errors = {}, {}
+    pending = jobs[:]
+    while pending and time.monotonic() < total_deadline and not CANCEL.is_set():
+        next_pending = []
+        for kind, port, ident in pending:
+            if CANCEL.is_set() or total_deadline - time.monotonic() <= 0:
+                next_pending.append((kind, port, ident))
+                continue
+            try:
+                answer = fetch_json('https://api.globalping.io/v1/measurements/' + ident, min(2, total_deadline - time.monotonic()))
+                answers[ident] = answer
+                errors.pop(ident, None)
+                if answer.get('status') not in ('finished', 'failed'):
+                    next_pending.append((kind, port, ident))
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                errors[ident] = 'RATE LIMIT' if '429' in str(exc) else 'API ERROR'
+                if '429' not in str(exc):
+                    next_pending.append((kind, port, ident))
+        pending = next_pending
+        if pending:
+            CANCEL.wait(min(1, max(0, total_deadline - time.monotonic())))
+    for kind, port, ident in jobs:
+        answer = answers.get(ident, {})
+        results = answer.get('results', [])
+        if not isinstance(results, list) or not results:
+            rows.append({'kind': kind, 'port': port, 'node': 'Globalping', 'status': errors.get(ident, 'API ERROR' if answer.get('status') == 'failed' else 'PENDING'), 'ms': None})
+            continue
+        for item in results[:3]:
+            if not isinstance(item, dict):
+                continue
+            result = item.get('result', {})
+            probe = item.get('probe', {})
+            if not isinstance(result, dict) or not isinstance(probe, dict):
+                continue
+            stats = result.get('stats', {})
+            if not isinstance(stats, dict):
+                continue
+            count = stats.get('rcv', 0)
+            average = stats.get('avg')
+            target_matches = result.get('resolvedAddress') == ip
+            valid = target_matches and isinstance(count, (int, float)) and not isinstance(count, bool) and 0 < count <= 3 and isinstance(average, (int, float)) and math.isfinite(average) and 0 <= average <= 180000
+            status = ('OPEN' if kind == 'tcp' else 'REPLY') if valid else 'NO REPLY' if target_matches and result.get('status') == 'finished' else 'API ERROR' if result.get('status') in ('failed', 'finished') else 'PENDING'
+            asn = str(probe.get('asn', ''))
+            asn = asn[2:] if asn.startswith('AS') else asn
+            asn = 'AS' + str(int(asn)) if asn.isdigit() and int(asn) > 0 else ''
+            rows.append({'kind': kind, 'port': port, 'node': clean('Globalping ' + str(probe.get('country', '')) + '/' + str(probe.get('city', ''))), 'country': clean(probe.get('country', '')), 'asn': asn, 'status': status, 'ms': average if valid else None})
+    return rows
+
+
+def independent_nodes(data, limit=4):
+    nodes = data.get('nodes', {})
+    if not isinstance(nodes, dict):
+        raise ValueError('Некорректный список внешних узлов')
+    selected, countries, asns = [], set(), set()
+    for name, info in sorted(nodes.items())[:300]:
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9-]+\.node\.check-host\.net', name) or not isinstance(info, dict):
+            continue
+        location, asn = info.get('location'), str(info.get('asn', ''))
+        if not isinstance(location, list) or len(location) < 3 or not re.fullmatch(r'AS[1-9][0-9]{0,9}', asn):
+            continue
+        country = str(location[0])
+        if country in countries or asn in asns:
+            continue
+        selected.append(name)
+        countries.add(country)
+        asns.add(asn)
+        if len(selected) == limit:
+            break
+    return selected
+
+
+def external(ip, ports):
+    rows = []
+    jobs = []
+    stage_deadline = min(END_TIME, time.monotonic() + 35)
+    target_ports = comparison_ports(ports)
+    selected = []
+    try:
+        selected = independent_nodes(fetch_json('https://check-host.net/nodes/hosts', timeout=4))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    for kind, port in [('ping', None)] + [('tcp', p) for p in target_ports]:
+        host = ip if port is None else ('[' + ip + ']' if family(ip) == socket.AF_INET6 else ip) + ':' + str(port)
+        try:
+            if stage_deadline - time.monotonic() <= 0:
+                break
+            parameters = [('host', host), ('max_nodes', '4')] + [('node', node) for node in selected]
+            data = fetch_json('https://check-host.net/check-' + kind + '?' + urllib.parse.urlencode(parameters), min(4, stage_deadline - time.monotonic()))
+            ident = data.get('request_id', '')
+            if data.get('ok') != 1 or not re.fullmatch('[A-Za-z0-9_-]{1,64}', str(ident)):
+                raise ValueError('Некорректный ответ Check-Host')
+            nodes = data.get('nodes', {})
+            if not isinstance(nodes, dict) or not nodes:
+                raise ValueError('Нет узлов Check-Host')
+            nodes = {node: info for node, info in list(nodes.items())[:4] if isinstance(node, str) and re.fullmatch(r'[A-Za-z0-9-]+\.node\.check-host\.net', node) and isinstance(info, list) and len(info) >= 3}
+            if not nodes:
+                raise ValueError('Некорректный список узлов')
+            jobs.append((kind, port, str(ident), nodes))
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            rows.append({'kind': kind, 'port': port, 'node': 'Check-Host', 'status': 'API ERROR', 'ms': None, 'detail': clean(str(exc))[:120]})
+    deadline = min(stage_deadline, time.monotonic() + 16)
+    pending = jobs[:]
+    while pending and time.monotonic() < deadline:
+        if CANCEL.is_set():
+            break
+        next_pending = []
+        for kind, port, ident, nodes in pending:
+            try:
+                answer = fetch_json('https://check-host.net/check-result/' + ident, min(4, max(1, deadline - time.monotonic())))
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                next_pending.append((kind, port, ident, nodes))
+                continue
+            unfinished = {}
+            for node, info in nodes.items():
+                status, ms = remote_value(answer.get(node), kind, ip)
+                if status == 'PENDING':
+                    unfinished[node] = info
+                else:
+                    location = '/'.join(str(x) for x in info[1:3]) if isinstance(info, list) else node
+                    rows.append({'kind': kind, 'port': port, 'node': clean(location), 'node_id': node, 'country': clean(info[0]), 'asn': clean(info[4]) if len(info) > 4 else '', 'status': status, 'ms': ms})
+            if unfinished:
+                next_pending.append((kind, port, ident, unfinished))
+        pending = next_pending
+        if pending:
+            CANCEL.wait(min(1, max(0, END_TIME - time.monotonic())))
+    for kind, port, ident, nodes in pending:
+        for node, info in nodes.items():
+            rows.append({'kind': kind, 'port': port, 'node': clean('/'.join(str(x) for x in info[1:3])), 'status': 'PENDING', 'ms': None})
+    if not any(row['status'] in ('OPEN', 'REPLY', 'REFUSED', 'TIMEOUT', 'NO REPLY') for row in rows) and not CANCEL.is_set() and stage_deadline - time.monotonic() > 4:
+        rows += globalping(ip, ports, min(18, stage_deadline - time.monotonic()))
+    return rows
+
+
+def classify(report):
+    result = {'state': 'INCONCLUSIVE', 'reachability': 'UNKNOWN', 'suspected_cause': 'UNKNOWN', 'confidence': 'Low', 'evidence': [], 'limitations': ['Без доступа к VPS нельзя отличить все правила firewall по исходному IP от фильтрации по пути.'], 'messages': []}
+    local = report.get('tcp', {})
+    opens = [p for p, v in local.items() if v['status'] == 'OPEN']
+    refused = [p for p, v in local.items() if v['status'] in ('REFUSED', 'RESET')]
+    ping_ok = report.get('ping', {}).get('received', 0) > 0
+    timestamp_ok = report.get('timestamp', {}).get('reachable', False)
+    trace_ok = any(v.get('reached') and v.get('status') not in ('RST', 'PORT CLOSED') for v in report.get('traces', {}).values())
+    syn_ok = any(v.get('status') == 'SYN/ACK' for v in report.get('syn', {}).values())
+    udp_open = [p for p, v in report.get('udp', {}).items() if v.get('reachable')]
+    application = any(v.get('reachable') for v in report.get('http', {}).values()) or report.get('ssh', {}).get('tcp_open') or report.get('ssh', {}).get('status') == 'SSH'
+    controls = sum(v['status'] == 'OPEN' for v in report.get('controls', {}).values())
+    evidence = result['evidence']
+    if opens:
+        evidence.append('TCP Connect: ' + ', '.join(map(str, opens)))
+    if ping_ok:
+        evidence.append('Получен ICMP Echo Reply от целевого IP')
+    if timestamp_ok:
+        evidence.append('Получен соответствующий запросу ICMP Timestamp Reply от целевого IP')
+    if udp_open:
+        evidence.append('UDP-ответ: ' + ', '.join(map(str, udp_open)))
+    if syn_ok:
+        evidence.append('Получен соответствующий исходной SYN-пробе SYN/ACK')
+    if refused:
+        evidence.append('Получен TCP RST/отказ: ' + ', '.join(map(str, refused)))
+    result['limitations'].append('Timeout ICMP/TCP/UDP и закрытый порт сами по себе не подтверждают блокировку IP.')
+    if report.get('route', {}).get('ok') is False:
+        result.update(state='LOCAL_NETWORK_PROBLEM', suspected_cause='NO_ROUTE', confidence='High', messages=['До VPS нет рабочего локального маршрута. Проверьте подключение и маршрутизацию.'])
+        return result
+    if not report.get('path', {}).get('direct_ready', False):
+        result['limitations'] += report.get('path', {}).get('risks', [])
+        result.update(suspected_cause='DIRECT_PATH_UNVERIFIED', messages=['Прямой путь не подтверждён: DIRECT_PATH_UNVERIFIED.', 'Результаты могут зависеть от VPN/прокси или локальных правил; вывод о блокировке IP недостоверен.'])
+        return result
+    direct_reply = bool(opens or application or udp_open or ping_ok or timestamp_ok or trace_ok or syn_ok)
+    historical = report.get('discovery', {})
+    if historical.get('historical') and historical.get('ports'):
+        result['limitations'].append('InternetDB содержит прежние наблюдения; отсутствие локального ответа на эти порты само по себе не доказывает блокировку.')
+    routing = report.get('routing', {})
+    visibility = routing.get('visibility', {})
+    if visibility.get('status') == 'VISIBLE':
+        evidence.append('BGP: маршрут наблюдают ' + str(visibility.get('peers_seen', 0)) + ' RIS-пиров; снимок ' + str(visibility.get('observed_at') or 'без даты'))
+    if visibility.get('stale'):
+        result['limitations'].append('BGP-снимок устарел или его время не подтверждено.')
+    if any(v.get('status') == 'INVALID' for v in routing.get('rpki', [])):
+        result['limitations'].append('RPKI не подтверждает объявление префикса/ASN: возможны ограничения маршрутизации; это не доказательство бана IP.')
+    remote_ports = {}
+    for row in report.get('external', []):
+        port = row.get('port')
+        if row.get('kind') == 'tcp' and row.get('status') == 'OPEN' and port in local and local[port]['status'] in ('TIMEOUT', 'PROHIBITED', 'HOST UNREACH', 'NO ROUTE'):
+            remote_ports.setdefault(port, []).append(row)
+    if remote_ports and controls:
+        ports = ', '.join(map(str, sorted(remote_ports)))
+        strong = False
+        local_filter = report.get('path', {}).get('local_filter', {})
+        local_rules = local_filter.get('candidates', [])
+        suspected_local = any(filter_affects(rule, port) for rule in local_rules for port in remote_ports)
+        for port, rows in remote_ports.items():
+            asns = {r.get('asn') for r in rows if r.get('asn')}
+            countries = {r.get('country') for r in rows if r.get('country')}
+            attempts = local[port].get('attempts', [])
+            if len(asns) >= 2 and len(countries) >= 2 and len(attempts) >= 2 and all(v['status'] in ('TIMEOUT', 'PROHIBITED') for v in attempts) and controls >= 2 and local_filter.get('status') == 'OK' and not suspected_local:
+                strong = True
+        evidence.append('Тот же IP/TCP-порт открыт извне, локально повторно не отвечает: ' + ports)
+        result.update(state='LIKELY_PATH_SPECIFIC_FILTERING' if strong else 'POSSIBLE_BLOCK', reachability='PARTIAL' if direct_reply else 'NOT_CONFIRMED', suspected_cause='PATH_OR_SOURCE_ACL', confidence='Medium' if strong else 'Low', messages=[('VPS доступен частично. ' if direct_reply else '') + 'С внешних узлов TCP ' + ports + ' доступен, с роутера — нет.', 'Возможна фильтрация на маршруте или firewall VPS по исходному адресу; блокировка провайдером не доказана.'])
+        if suspected_local:
+            result.update(state='PORT_FILTERED' if direct_reply else 'INCONCLUSIVE', suspected_cause='LOCAL_RULE_OR_PATH', confidence='Low', messages=['TCP ' + ports + ' доступен извне, локально ответ не подтверждён.', 'На роутере есть потенциально ограничивающие правила firewall. Их действие нужно исключить до вывода о внешней фильтрации.'])
+        elif local_filter.get('status') != 'OK':
+            result['limitations'].append('Локальная таблица filter не проверена полностью; высокая уверенность в причине недоступна.')
+        return result
+    if direct_reply:
+        result.update(state='REACHABLE', reachability='REACHABLE', confidence='High', suspected_cause='NONE')
+        if opens or application:
+            result['messages'] = ['VPS доступен из вашей сети' + (' по TCP: ' + ', '.join(map(str, opens)) if opens else '') + '.', 'Получен прямой ответ; полная блокировка IP не подтверждается.']
+        elif udp_open:
+            result['messages'] = ['Получен ответ по UDP: ' + ', '.join(map(str, udp_open)) + '; IP доступен из вашей сети.', 'Доступность TCP-сервисов не подтверждена.']
+        else:
+            result['messages'] = ['IP отвечает из вашей сети, но проверяемые TCP-сервисы не подтвердили доступность.', 'Проверьте порты сервиса и firewall VPS.']
+        filtered = [p for p, v in local.items() if v['status'] in ('TIMEOUT', 'PROHIBITED') and len(v.get('attempts', [])) >= 2]
+        if opens and filtered:
+            result.update(state='PORT_FILTERED', reachability='PARTIAL', suspected_cause='PORT_NO_RESPONSE', confidence='Low')
+            result['limitations'].append('Порты без ответа: ' + ', '.join(map(str, filtered)) + '. Сервис может отсутствовать; источник фильтрации не установлен.')
+        tls = [value for values in report.get('tls', {}).values() for value in values.values()]
+        if tls and all(v['status'] == 'PROTOCOL_FAILURE' for v in tls):
+            result['suspected_cause'] = 'PROTOCOL_FAILURE'
+            result['limitations'].append('TLS без SNI не прошёл: возможны требования виртуального хоста, версия TLS или протокольное ограничение; DPI не подтверждён.')
+        return result
+    if refused:
+        result.update(suspected_cause='CLOSED_OR_REJECTED', confidence='Medium', reachability='RESPONSE_OBSERVED', messages=['На TCP получен явный отказ. Возможны закрытые порты или отклонение firewall.', 'Ответ мог сформировать промежуточный узел; пассивную блокировку IP подтвердить нельзя.'])
+        return result
+    errors = [v['status'] for v in local.values() if v['status'] in ('NET ERROR', 'NO PERMISSION', 'BYPASS FAIL', 'ERROR')]
+    if errors and not any(v['status'] in ('TIMEOUT', 'PROHIBITED') for v in local.values()):
+        result.update(state='CHECK_ERROR', suspected_cause='PROBE_ERROR', messages=['Не удалось выполнить необходимые сетевые проверки.', 'Ошибка инструмента не является признаком блокировки VPS.'])
+    elif not controls:
+        result.update(state='LOCAL_NETWORK_PROBLEM' if report.get('controls') else 'INCONCLUSIVE', suspected_cause='CONTROL_UNAVAILABLE', messages=['Нет подтверждённой доступности ни VPS, ни контрольных адресов.', 'Проверьте Интернет и исходящие правила роутера; блокировка VPS не установлена.'])
+    else:
+        prohibited = any(v['status'] == 'PROHIBITED' for v in local.values()) or any(v.get('status') == 'PROHIBITED' for v in report.get('traces', {}).values())
+        result.update(state='POSSIBLE_BLOCK' if prohibited else 'INCONCLUSIVE', reachability='NOT_CONFIRMED', suspected_cause='PATH_OR_FIREWALL' if prohibited else 'NO_RESPONSE', messages=['Интернет с роутера доступен, но VPS не ответил.', 'Возможны выключенный VPS, закрытые сервисы, firewall или фильтрация пути. Однозначно определить причину пока нельзя.'])
+        if report.get('bgp', {}).get('status') == 'NOT ANNOUNCED':
+            result.update(state='INCONCLUSIVE', suspected_cause='BGP_ROUTE_NOT_ANNOUNCED', confidence='Medium', messages=['VPS не ответил; RIPEstat не подтвердил активный BGP-анонс префикса.', 'Возможна общая проблема маршрутизации префикса. Данных о блокировке провайдером недостаточно.'])
+            evidence.append('RIPEstat: префикс не анонсирован')
+    return result
+
+
+def verdict(report):
+    return classify(report)['messages']
+
+
+def status_text(status):
+    extra = {'FOUND': 'Найдены порты', 'REVIEW': 'Есть правила', 'STUN REPLY': 'STUN ответил', 'TIMESTAMP REPLY': 'ICMP ответил', 'VISIBLE': 'Маршрут виден', 'NOT VISIBLE': 'Не наблюдается', 'VALID': 'ROA корректен', 'INVALID': 'Проверьте ROA', 'BANNER REPLY': 'Сервис ответил'}
+    if status in extra:
+        return extra[status]
+    return {'OK': 'Работает', 'OPEN': 'Доступен', 'SSH': 'Доступен', 'TIMEOUT': 'Нет ответа',
+            'NO REPLY': 'Нет ответа', 'QUIC VN': 'QUIC отвечает', 'NO DATA': 'Нет данных', 'REFUSED': 'Порт закрыт',
+            'PORT CLOSED': 'Порт закрыт', 'REPLY': 'Получен ответ', 'NO ROUTE': 'Нет маршрута',
+            'PROHIBITED': 'Запрет узла', 'UNREACHABLE': 'Недоступно',
+            'ANNOUNCED': 'Подтвержден', 'NOT ANNOUNCED': 'Нет анонса',
+            'DIRECT': 'Напрямую', 'SYSTEM': 'Системный путь', 'TLS CERT': 'Серт. не принят',
+            'PARTIAL': 'Часть ответов', 'UNKNOWN': 'Не определено', 'FAILED': 'Ошибка',
+            'BYPASS FAIL': 'Обход не выполнен', 'RATE LIMIT': 'Лимит запросов',
+            'TLS DROP': 'TLS: нет ответа', 'EOF': 'Соединение закрыто', 'RST': 'Порт закрыт',
+            'ECHO REPLY': 'Цель ответила', '*': 'Нет ответа', 'SKIPPED': 'Пропущено',
+            'INCONCLUSIVE': 'Нет достоверной пробы', 'API ERROR': 'Ошибка API', 'ERROR': 'Ошибка проверки',
+            'PENDING': 'Не завершено', 'TLS OK': 'TLS работает', 'PROTOCOL_FAILURE': 'Ошибка протокола',
+            'NO PERMISSION': 'Нет прав', 'CANCELLED': 'Остановлено', 'NETWORK UNREACHABLE': 'Сеть недоступна',
+            'HOST UNREACHABLE': 'Узел недоступен', 'HOST UNREACH': 'Узел недоступен', 'NET ERROR': 'Сетевая ошибка',
+            'RESET': 'Разрыв / RST', 'TOO BIG': 'Превышен MTU', 'TTL EXCEEDED': 'TTL исчерпан'}.get(status, status)
+
+
+def trace_cell(value, index):
+    if index >= len(value['hops']):
+        return ''
+    hop = value['hops'][index]
+    if not hop['ip']:
+        return status_text(hop['status'])
+    text = hop['ip'] + f" · {hop['ms']:.1f} мс"
+    if hop['reached']:
+        text += ' · цель'
+    elif hop['status'] in ('PROHIBITED', 'UNREACHABLE', 'NETWORK UNREACHABLE', 'HOST UNREACHABLE'):
+        text = hop['ip'] + (' · запрет' if hop['status'] == 'PROHIBITED' else ' · недоступен')
+    return text
+
+
+def trace_color(value, index):
+    if index >= len(value['hops']):
+        return '90'
+    hop = value['hops'][index]
+    if hop['reached']:
+        return '32;1'
+    if hop['status'] in ('PROHIBITED', 'UNREACHABLE', 'NETWORK UNREACHABLE', 'HOST UNREACHABLE'):
+        return '31;1'
+    return '32' if hop['ip'] else '31;1'
+
+
+def trace_summary(value):
+    if value['reached']:
+        return 'VPS ответил; путь до IP подтвержден', '32;1'
+    if value['status'] == 'PROHIBITED':
+        return 'Узел пути запретил пробу; трассировка остановлена', '31;1'
+    if value['status'] in ('UNREACHABLE', 'NETWORK UNREACHABLE', 'HOST UNREACHABLE'):
+        return 'Узел сообщил о недоступности; трассировка остановлена', '31;1'
+    if value['hops']:
+        return 'Ответ VPS не получен за ' + str(len(value['hops'])) + ' хопов', '33'
+    return 'Проверка не выполнена: ' + status_text(value['status']), '31;1'
+
+
+def run_stage(report, title, jobs, quiet=False):
+    started = time.monotonic()
+    completed = 0
+    if not quiet:
+        progress(title)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        tasks = {}
+        for key, function, arguments in jobs:
+            if not CANCEL.is_set() and END_TIME - time.monotonic() > .05:
+                tasks[pool.submit(function, *arguments)] = key
+        try:
+            for future in concurrent.futures.as_completed(tasks):
+                key, index = tasks[future]
+                try:
+                    value = future.result()
+                except (OSError, ValueError, TypeError, AttributeError, IndexError, MemoryError, subprocess.SubprocessError, ssl.SSLError) as exc:
+                    value = {'status': 'ERROR', 'detail': clean(str(exc))[:160], 'ms': None}
+                    report['errors'].append(title + ': ' + clean(str(exc))[:160])
+                    if key == 'external':
+                        value = [{'kind': 'api', 'port': None, 'node': 'Внешний API', 'status': 'API ERROR', 'ms': None, 'detail': clean(str(exc))[:160]}]
+                if index is None:
+                    if isinstance(report.get(key), dict) and isinstance(value, dict):
+                        report[key].update(value)
+                    else:
+                        report[key] = value
+                else:
+                    report[key][index] = value
+                completed += 1
+                if not quiet:
+                    progress(title + ' · ' + str(completed) + '/' + str(len(tasks)))
+        except BaseException:
+            stop_probes()
+            for future in tasks:
+                future.cancel()
+            raise
+    report['stages'].append({'name': title, 'elapsed': time.monotonic() - started, 'completed': completed, 'requested': len(jobs)})
+
+
+def render_report(report):
+    columns = max(60, min(108, shutil.get_terminal_size((100, 24)).columns))
+    print(paint('Проверка блокировки IP · ' + report['ip']))
+    path = report['path']
+    print('Интерфейс: ' + (path.get('interface') or 'не подтверждён') + ' · исходный IP: ' + (path.get('source') or 'не определён'))
+    print(paint('Путь: ' + ('напрямую через WAN' if path['direct_ready'] else 'DIRECT_PATH_UNVERIFIED'), '32' if path['direct_ready'] else '33;1'))
+    network = report.get('bgp', {})
+    for owner in network.get('asns', [])[:3]:
+        print('ASN: ' + paint('AS' + str(owner['asn']), '33;1') + ' · Хостер: ' + paint(fit(owner.get('holder') or 'не определён', columns - 34), '35;1'))
+    rows = []
+    def add(method, status, detail, ms=None):
+        good = status in ('OK', 'OPEN', 'REPLY', 'QUIC VN', 'SSH', 'ANNOUNCED', 'TLS OK', 'STUN REPLY', 'TIMESTAMP REPLY', 'VISIBLE', 'VALID', 'BANNER REPLY') or status.startswith('HTTP ')
+        color = '36;1' if status == 'FOUND' else '32;1' if good else '90' if status in ('SKIPPED', 'INCONCLUSIVE', 'NO DATA', 'UNKNOWN', 'PENDING') else '33;1' if status in ('TLS CERT', 'PARTIAL', 'REFUSED', 'PORT CLOSED', 'CLOSED', 'OPEN_FILTERED', 'INVALID', 'NOT VISIBLE', 'REVIEW') else '31;1'
+        rows.append(([method, status_text(status), (f'{ms:.1f} мс · ' if ms is not None else '') + str(detail or 'Нет дополнительных сведений')], color))
+    route_info = report['route']
+    route_detail = (route_info.get('interface', '') + (' → ' + route_info['gateway'] if route_info.get('gateway') else '')).strip()
+    add('Маршрут', route_info['status'], route_detail or route_info.get('detail', ''))
+    historical = report.get('discovery', {})
+    if historical.get('status') != 'SKIPPED' and historical:
+        chosen = historical.get('selected_ports', [])
+        add('Поиск портов', historical.get('status', 'NO DATA'), 'Ранее: ' + ', '.join(map(str, chosen)) if chosen else 'Новых портов нет' if historical.get('status') == 'FOUND' else 'InternetDB: API недоступен' if historical.get('status') in ('API ERROR', 'ERROR') else 'InternetDB: запись об IP не найдена')
+    if report.get('timestamp'):
+        value = report['timestamp']
+        add('ICMP Timestamp', value['status'], 'ответ на отдельный тип ICMP' if value.get('reachable') else 'ответ не получен; это не признак бана', value.get('ms'))
+    for key, label in (('ping', 'ICMP 56 B'), ('medium_ping', 'ICMP 1200 B'), ('large_ping', 'ICMP DF/1500 B')):
+        value = report.get(key, {})
+        if not value:
+            continue
+        detail = f"{value.get('received', 0)}/{value.get('sent', 0)} ответов"
+        if value.get('loss_percent') is not None:
+            detail += f" · потери {value['loss_percent']:.0f}%"
+        if value.get('min_ms') is not None:
+            detail += f" · среднее {value['avg_ms']:.1f} мс"
+        if value.get('unstable'):
+            detail += ' · нестабильно'
+        mtus = [v['mtu'] for v in value.get('events', []) if v.get('mtu')]
+        if mtus:
+            detail += '; MTU ' + str(min(mtus))
+        add(label, value['status'], detail)
+    for port, value in report['tcp'].items():
+        state = value.get('port_state', 'UNKNOWN')
+        detail = {'OPEN': 'соединение установлено', 'CLOSED': 'RST: закрыт или отклонён', 'FILTERED': 'причина неизвестна', 'ERROR': 'ошибка проверки', 'UNKNOWN': 'не проверялся'}.get(state, state)
+        if value['status'] == 'PROHIBITED':
+            detail = 'получен запрет'
+        attempts = value.get('attempts', [])
+        if len(attempts) > 1:
+            detail += ' · попыток ' + str(len(attempts))
+        if value.get('unstable'):
+            detail += ' · нестабильно'
+        add('TCP/' + str(port), value['status'], detail, value.get('ms'))
+    for port, value in report['udp'].items():
+        detail = 'QUIC ответил' if value['status'] == 'QUIC VN' else 'UDP ответил; QUIC не подтверждён' if value.get('reachable') and port == 443 else 'сервис ответил' if value.get('reachable') else 'порт закрыт / отклонён' if value['status'] == 'PORT CLOSED' else 'сервис отсутствует или фильтруется'
+        if value['status'] == 'STUN REPLY':
+            detail = 'STUN: код ' + str(value['error_code']) if value.get('error_code') else 'STUN Binding подтвердил ответ'
+        if value.get('reachable') and isinstance(value.get('attempts'), int) and value['attempts'] > 1:
+            detail += '; повторная проба, RTT не определён'
+        add('UDP/' + str(port), value['status'], detail, value.get('ms'))
+    for port, value in report.get('services', {}).items():
+        protocol = value.get('protocol', 'UNKNOWN')
+        add('Сервис/' + str(port), 'BANNER REPLY' if value.get('status') == 'BANNER REPLY' else 'NO DATA', protocol if protocol != 'UNKNOWN' else 'баннер не распознан; TCP проверен')
+    value = report.get('ssh')
+    if value:
+        add('SSH/22', value['status'], 'SSH-сервер ответил' if value['status'] == 'SSH' else 'SSH-приветствие не получено')
+    for port, versions in report.get('tls', {}).items():
+        for version, value in versions.items():
+            add('TLS ' + version + '/' + str(port), value['status'], 'без SNI; handshake прошёл' if value['status'] == 'TLS OK' else value.get('error') or status_text(value['status']))
+    for port, value in report['http'].items():
+        detail = 'TLS есть; сертификат не принят' if value['status'] == 'TLS CERT' else 'HTTP-сервер ответил' if value['status'].startswith('HTTP ') else value.get('detail', '')
+        add('HTTPS/' + str(port) if port == 443 else 'HTTP/' + str(port), value['status'], detail)
+    control_open = sum(v['status'] == 'OPEN' for v in report['controls'].values())
+    add('Контроль сети', 'OK' if control_open else 'NO REPLY', str(control_open) + '/' + str(len(report['controls'])) + ' контрольных TCP/443')
+    if 'bgp' in report:
+        add('BGP-префикс', report['bgp']['status'], report['bgp'].get('prefix') or 'ASN не подтверждён')
+    routing = report.get('routing', {})
+    visibility = routing.get('visibility', {})
+    if visibility:
+        add('BGP RIS', 'NO DATA' if visibility.get('stale') else visibility['status'], visibility.get('detail', '') + ('; снимок устарел' if visibility.get('stale') else ''))
+    for value in routing.get('rpki', []):
+        add('RPKI AS' + str(value['asn']), value['status'], 'ROA отсутствует; это не ошибка' if value['status'] == 'UNKNOWN' else value['prefix'])
+    if routing.get('errors') and not routing.get('rpki'):
+        add('Данные RPKI', 'API ERROR', 'API недоступен; не признак бана')
+    filters = path.get('local_filter', {})
+    if filters.get('candidates'):
+        add('Локальный filter', 'REVIEW', 'DROP/REJECT найдены; действие не подтверждено')
+    table(['Проверка', 'Результат', 'Подробности'], rows, [17, 16, columns - 43], compact=True)
+    if report['external']:
+        remote_rows = []
+        for value in report['external']:
+            good = value['status'] in ('OPEN', 'REPLY')
+            color = '32;1' if good else '90' if value['status'] in ('NO DATA', 'PENDING') else '31;1'
+            method = 'ICMP' if value['kind'] == 'ping' else 'TCP/22 (SSH)' if value.get('port') == 22 else 'TCP/' + str(value['port'])
+            remote_rows.append(([value['node'], method, status_text(value['status']), f"{value['ms']:.1f} мс" if value.get('ms') is not None else 'нет RTT'], ['36;1', '37', color, '32' if good else '90']))
+        checked = sorted({v['port'] for v in report['external'] if v.get('kind') == 'tcp' and v.get('port') not in (443, 22)})
+        print(paint('Внешняя проверка · ICMP, TCP/443 и TCP/22 (SSH)' + (' + TCP/' + ','.join(map(str, checked)) if checked else '')))
+        table(['Откуда', 'Проверка', 'Результат', 'RTT'], remote_rows, [min(32, columns - 52), 12, 17, 10], compact=True)
+    analysis = report['analysis']
+    title = {'REACHABLE': 'IP доступен', 'PORT_FILTERED': 'IP доступен · часть портов не отвечает', 'LIKELY_PATH_SPECIFIC_FILTERING': 'Есть признаки фильтрации пути', 'POSSIBLE_BLOCK': 'Возможно ограничение', 'LOCAL_NETWORK_PROBLEM': 'Проблема локальной сети', 'CHECK_ERROR': 'Ошибка проверки', 'INCONCLUSIVE': 'Недостаточно данных'}[analysis['state']]
+    result_color = '32;1' if analysis['state'] in ('REACHABLE', 'PORT_FILTERED') else '31;1' if analysis['state'] in ('LOCAL_NETWORK_PROBLEM', 'CHECK_ERROR') else '33;1'
+    print(paint(title, result_color))
+    for message in analysis['messages']:
+        print(paint(message, result_color))
+    if analysis.get('suspected_cause') == 'PORT_NO_RESPONSE':
+        unanswered = [str(port) for port, value in report['tcp'].items() if value['status'] in ('TIMEOUT', 'PROHIBITED') and len(value.get('attempts', [])) >= 2]
+        print(paint('Без ответа: TCP ' + ', '.join(unanswered) + '.', '33'))
+        print('Причина отсутствия ответа не установлена: сервис может отсутствовать или фильтроваться.')
+    if report.get('deadline_reached'):
+        print(paint('Достигнут лимит времени: часть проверок не завершена.', '33'))
+    if not report.get('cleanup_ok', True):
+        print(paint('Не все временные исключения удалены.', '31;1'))
+    print(paint(f"Длительность проверки: {report['elapsed']:.1f} с.", '90'))
+
+
+def main():
+    global BYPASS_MARK, END_TIME, WAN_INTERFACE
+    parser = argparse.ArgumentParser(description='Xmenu: проверка блокировки IP VPS')
+    parser.add_argument('target')
+    parser.add_argument('--ports', default='')
+    parser.add_argument('--sni', default='')
+    parser.add_argument('--hops', type=int, default=15)
+    parser.add_argument('--timeout', type=float, default=120)
+    parser.add_argument('--no-external', action='store_true')
+    parser.add_argument('--details', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args()
+    parts = args.target.split()
+    ip = public_target(parts[0] if parts else '')
+    address = ipaddress.ip_address(ip)
+    ports = list(dict.fromkeys(int(v) for v in (args.ports.replace(',', ' ').split() if args.ports else parts[1:] or DEFAULT_PORTS)))
+    if not 1 <= len(ports) <= 16 or any(not 1 <= p <= 65535 for p in ports) or not 1 <= args.hops <= 15 or not 20 <= args.timeout <= 180:
+        raise ValueError('Нужно 1–16 портов 1–65535; hops 1–15; timeout 20–180 секунд')
+    if args.sni and (len(args.sni) > 253 or not re.fullmatch(r'[A-Za-z0-9.-]+', args.sni)):
+        raise ValueError('Некорректное имя SNI')
+    private = args.no_external
+    if not private:
+        ports = list(dict.fromkeys(ports + [443, 22]))
+    CANCEL.clear()
+    WAN_INTERFACE = ''
+    started = time.monotonic()
+    END_TIME = started + args.timeout
+    watchdog = threading.Timer(args.timeout, stop_probes)
+    watchdog.daemon = True
+    watchdog.start()
+    path = detect_path(ip)
+    BYPASS_MARK = path['mark']
+    path_route = inspect_route(ip, path)
+    path['local_filter'] = inspect_filter(ip, path)
+    skipped = lambda port: {'status': 'SKIPPED', 'port_state': 'UNKNOWN', 'ms': None, 'port': port, 'attempts': []}
+    report = {'schema_version': 2, 'version': '1.4.4', 'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'ip': ip, 'ports': ports, 'path': path, 'route': path_route, 'tcp': {p: skipped(p) for p in ports}, 'udp': {}, 'http': {}, 'tls': {}, 'syn': {}, 'services': {}, 'discovery': {'status': 'SKIPPED', 'ports': []}, 'routing': {}, 'controls': {}, 'traces': {}, 'external': [], 'external_status': 'DISABLED' if private else 'NOT_NEEDED', 'stages': [], 'errors': [], 'ping': {'status': 'SKIPPED', 'sent': 0, 'received': 0, 'rtts': [], 'events': []}, 'settings': {'external_allowed': not private, 'timeout': args.timeout, 'max_workers': 3, 'max_hops': args.hops, 'discovery_port_cap': MAX_DISCOVERY_PORTS, 'total_port_cap': MAX_TOTAL_PORTS}, 'dependencies': {name: bool(shutil.which(name)) for name in ('ip', 'iptables', 'ip6tables', 'nft', 'nmap', 'mtr', 'curl', 'jq')}}
+    quiet = args.json
+    try:
+        if not quiet:
+            progress('1/6 · Проверка маршрута и WAN')
+        if path_route.get('ok') is not False:
+            primary = [p for p in ports if p in (22, 80, 443, 8080, 8443)]
+            if not primary:
+                primary = ports[:3]
+            controls = ('2606:4700:4700::1111', '2001:4860:4860::8888', '2620:fe::fe') if address.version == 6 else ('1.1.1.1', '8.8.8.8', '9.9.9.9')
+            controls = tuple(value for value in controls if value != ip)
+            jobs = [(('tcp', p), tcp_discovery, (ip, p)) for p in primary]
+            if not private:
+                jobs.insert(0, (('discovery', None), discover_ports, (ip,)))
+            jobs += [(('controls', control), tcp, (control, 443, 2)) for control in controls]
+            jobs.append((('ping', None), echo, (ip, 56, 3, False, 1)))
+            run_stage(report, '2/6 · ICMP и основные TCP-порты', jobs, quiet)
+            basic_open = any(v['status'] == 'OPEN' for v in report['tcp'].values())
+            selected_ports = discovery_targets(report['discovery'], report['tcp'])
+            report['discovery']['selected_ports'] = selected_ports
+            for port in selected_ports:
+                if port not in report['tcp']:
+                    ports.append(port)
+                    report['tcp'][port] = skipped(port)
+            jobs = []
+            if not basic_open:
+                jobs += [(('tcp', p), tcp_discovery, (ip, p)) for p in ports if p not in primary]
+            else:
+                jobs += [(('tcp', p), tcp_discovery, (ip, p)) for p in selected_ports]
+            jobs += [(('large_ping', None), echo, (ip, 1452 if address.version == 6 else 1472, 2, True, 1)), (('udp', 443), udp_service, (ip, 443))]
+            if not basic_open or report['ping'].get('unstable'):
+                jobs += [(('medium_ping', None), echo, (ip, 1200, 2, False, 1)), (('udp', 53), udp_service, (ip, 53)), (('udp', 123), udp_service, (ip, 123))]
+            if not basic_open or 3478 in report['discovery'].get('ports', []):
+                jobs.append((('udp', 3478), udp_service, (ip, 3478)))
+            if not basic_open and not report['ping'].get('received') and address.version == 4:
+                jobs.append((('timestamp', None), timestamp_probe, (ip,)))
+            run_stage(report, '3/6 · Дополнительные порты, UDP и MTU', jobs, quiet)
+            jobs = []
+            if not private and END_TIME - time.monotonic() > .1:
+                candidates = sorted(selected_ports, key=lambda p: {'TIMEOUT': 0, 'PROHIBITED': 0, 'OPEN': 1, 'REFUSED': 2}.get(report['tcp'][p]['status'], 3))
+                compare = comparison_ports(candidates)
+                report['settings']['external_tcp_ports'] = compare
+                jobs.append((('external', None), external, (ip, compare)))
+                report['external_status'] = 'REQUESTED'
+                jobs.append((('bgp', None), bgp, (ip,)))
+            run_stage(report, '4/6 · Независимые внешние узлы', jobs, quiet)
+            if private:
+                report['bgp'] = {'status': 'NO DATA', 'detail': 'ASN не подтвержден: внешние запросы отключены'}
+            jobs = []
+            remote_open = {r['port'] for r in report['external'] if r['kind'] == 'tcp' and r['status'] == 'OPEN' and r['port'] in report['tcp']}
+            for port in remote_open:
+                if report['tcp'][port]['status'] != 'OPEN':
+                    jobs.append((('tcp', port), tcp_recheck, (ip, port, report['tcp'][port])))
+            if jobs:
+                run_stage(report, '4/6 · Локальная перепроверка тех же портов', jobs, quiet)
+            jobs = []
+            if not private and report.get('bgp', {}).get('prefix') and END_TIME - time.monotonic() > 1:
+                jobs.append((('routing', None), routing_analysis, (ip, report['bgp'])))
+            opens = [p for p, v in report['tcp'].items() if v['status'] == 'OPEN']
+            no_open = not opens
+            if 22 in opens:
+                jobs.append((('ssh', None), ssh_banner, (ip,)))
+            for port in [p for p in selected_ports if p in opens and p not in (22, 80, 443)][:2]:
+                jobs.append((('services', port), banner_probe, (ip, port)))
+            for port in (80, 443):
+                if port in opens:
+                    jobs.append((('http', port), http_probe, (ip, port, port == 443, args.sni)))
+            tls_ports = [p for p in (443, 8443, 2053, 2083, 2087, 2096) if p in opens][:2]
+            for port in tls_ports:
+                report['tls'][port] = {}
+                for name, version in (('1.2', ssl.TLSVersion.TLSv1_2), ('1.3', ssl.TLSVersion.TLSv1_3)):
+                    jobs.append((('tls_' + str(port), name), tls_confirm, (ip, port, version)))
+                report['tls_' + str(port)] = report['tls'][port]
+            if no_open:
+                jobs += [(('syn', port), syn_probe, (ip, port)) for port in ([443] if 443 in ports else ports[:1])]
+            run_stage(report, '5/6 · TLS без SNI, HTTP и SYN', jobs, quiet)
+            for port in tls_ports:
+                report.pop('tls_' + str(port), None)
+            jobs = [(('traces', mode), trace, (ip, mode, args.hops, 443 if 443 in ports else ports[0], .7)) for mode in ('ICMP', 'UDP', 'TCP')]
+            if no_open and 22 in ports and END_TIME - time.monotonic() > 20:
+                jobs.append((('traces', 'TCP/22'), trace, (ip, 'TCP', args.hops, 22, .7)))
+            run_stage(report, '5/6 · Трассировка пути', jobs, quiet)
+    finally:
+        watchdog.cancel()
+        cleanup_flows()
+    report['cleanup_ok'] = not FLOW_RULES
+    report['deadline_reached'] = time.monotonic() >= END_TIME
+    report['elapsed'] = time.monotonic() - started
+    path['observed_sources'] = sorted({v['source'] for v in report['tcp'].values() if v.get('status') == 'OPEN' and v.get('source')})
+    if any(source != path.get('source') for source in path['observed_sources']):
+        path['risks'].append('Реальный исходный адрес TCP отличается от проверенного маршрута')
+        path['direct_ready'] = False
+        path['status'] = 'DIRECT_PATH_UNVERIFIED'
+    if any(v['status'] == 'BYPASS FAIL' for group in ('tcp', 'udp') for v in report[group].values()):
+        path['direct_ready'] = False
+        path['status'] = 'DIRECT_PATH_UNVERIFIED'
+    if not report['cleanup_ok']:
+        report['errors'].append('Не все временные исключения удалены')
+    report['analysis'] = classify(report)
+    if not quiet:
+        progress('6/6 · Итог проверки')
+    report['verdict'] = report['analysis']['messages']
+    if report['deadline_reached']:
+        report['analysis']['limitations'].append('Общий лимит времени: незавершённые проверки не используются как признаки блокировки.')
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, allow_nan=False))
+        return 0
+    progress('')
+    render_report(report)
+    return 0
+
+
+if __name__ == '__main__':
+    def cancel(signum, frame):
+        stop_probes()
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, cancel)
+    signal.signal(signal.SIGINT, cancel)
+    try:
+        sys.exit(main())
+    except (KeyboardInterrupt, EOFError):
+        print('\nПроверка отменена.')
+        sys.exit(130)
+    except (OSError, ValueError, IndexError) as exc:
+        print('Ошибка: ' + clean(str(exc)), file=sys.stderr)
+        sys.exit(2)
+    finally:
+        cleanup_flows()
+
+XMENU_SERVER_ENGINE
+}
 
 xmenu_diagnostics_menu() {
     while :; do
         line; say "${CYAN}Диагностика${RESET}"
         menu_item 1 'Диагностика сайта — DNS / TCP / TLS / HTTP'
         menu_item 2 'DPI Detector'
+        menu_item 3 'Проверка DNS-серверов и признаков подмены'
+        menu_item 4 'Доступность VPS-сервера'
         menu_item 0 'Назад'
-        _read_or_eof 'Выберите пункт: ' || return 0
+        _read_or_eof 'Выберите пункт (Enter — назад): ' || return 0
         case "$_read_value" in
             1)
-                _read_or_eof 'Домен или URL (0 — назад): ' || return 0
-                case "$_read_value" in 0|'') continue ;; esac
-                xmenu_site_check "$_read_value" || :
+                _read_or_eof 'До 5 доменов, IPv4, IPv6 или URL через пробел (0 — назад): ' || return 0
+                case "$_read_value" in 0|'') return 0 ;; esac
+                _site_targets=$_read_value
+                xmenu_site_input_batch "$_site_targets" || :
                 pause ;;
             2) launch_dpi; pause ;;
-            0) return 0 ;;
+            3)
+                _dns_menu_rc=0
+                xmenu_dns_diagnose || _dns_menu_rc=$?
+                [ "$_dns_menu_rc" != 3 ] || return 0
+                pause ;;
+            4)
+                _read_or_eof 'Публичный IP VPS (IPv4; Enter — назад): ' || return 0
+                case "$_read_value" in 0|'') return 0 ;; esac
+                xmenu_server_diagnose "$_read_value" || : ;;
+            0|'') return 0 ;;
         esac
     done
 }
@@ -2931,7 +6677,7 @@ render_component_status_table() {
                 printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$YELLOW" "$_row_version" "$GREEN" "$RESET"
                 ;;
             *)
-                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$CYAN" "$_row_version" "$GREEN" "$RESET"
+                printf '  %s%-22s %s%s %s⚡%s\n' "$PURPLE" "$_row_label" "$BRIGHT_CYAN" "$_row_version" "$GREEN" "$RESET"
                 ;;
         esac
     done < "$_rcst_file"
@@ -3588,10 +7334,10 @@ check_xmenu_update_now() {
     if version_is_older "$APP_VERSION" "$_cxu_version"; then
         if [ "$_cxu_lang" = en ]; then
             say "${CYAN}↑ Update available: Xmenu v$_cxu_version (installed: v$APP_VERSION).${RESET}"
-            say 'Choose option 20 — Update Xmenu to install it.'
+            say 'Choose option 21 — Update Xmenu to install it.'
         else
             say "${CYAN}↑ Доступно обновление Xmenu v$_cxu_version (установлена: v$APP_VERSION).${RESET}"
-            say 'Для установки выбери пункт 20 — «Обновить Xmenu». '
+            say 'Для установки выбери пункт 21 — «Обновить Xmenu». '
         fi
         XMENU_MANUAL_UPDATE_CHECK=0
         return 0
@@ -3759,15 +7505,15 @@ xmenu_show_pending_update_notice() {
     xmenu_valid_version "$_xsp_latest" || return 0
     version_is_older "$APP_VERSION" "$_xsp_latest" || return 0
     if [ "$(get_ui_lang)" = en ]; then
-        _xsp_notice="↑ Update available: Xmenu v$_xsp_latest. Choose option 20 to install it."
+        _xsp_notice="↑ Update available: Xmenu v$_xsp_latest. Choose option 21 to install it."
     else
-        _xsp_notice="↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 20 для установки."
+        _xsp_notice="↑ Доступно обновление Xmenu v$_xsp_latest. Выбери пункт 21 для установки."
     fi
     _xsp_width=$(terminal_width)
     _xsp_length=$(printf '%s' "$_xsp_notice" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
     if [ $((_xsp_length + 2)) -ge "$_xsp_width" ]; then
-        if [ "$(get_ui_lang)" = en ]; then _xsp_notice="↑ Xmenu v$_xsp_latest — update: 22"
-        else _xsp_notice="↑ Xmenu v$_xsp_latest — обновить: 22"; fi
+        if [ "$(get_ui_lang)" = en ]; then _xsp_notice="↑ Xmenu v$_xsp_latest — update: 21"
+        else _xsp_notice="↑ Xmenu v$_xsp_latest — обновить: 21"; fi
     fi
     say "${CYAN}  $_xsp_notice${RESET}"
     XMENU_UPDATE_NOTICE_VISIBLE=1
@@ -5985,7 +9731,7 @@ render_menu_content() {
     # У заголовка постоянный отступ в 12 знакомест, как в образце интерфейса.
     _title="Xmenu ◆ v$APP_VERSION"
     XMENU_UPDATE_NOTICE_VISIBLE=0
-    printf '%12s%s%s%s\n' '' "$WHITE" "$_title" "$RESET"
+    printf '%12s%s%s%s\n' '' "$BRIGHT_CYAN" "$_title" "$RESET"
     line
 
     # Prefer Entware architecture over the kernel architecture.
@@ -5995,9 +9741,9 @@ render_menu_content() {
     fi
 
     if [ "$_lang" = en ]; then
-            printf '%sModel: %s %s (%s)%s\n' "$CYAN" "$_model" "${_fw:-not detected}" "$_cpu" "$RESET"
+            printf '%s%sModel: %s %s%s %s%s(%s)%s\n' "$RESET" "$WHITE" "$_model" "$BRIGHT_CYAN" "${_fw:-not detected}" "$RESET" "$GREEN" "$_cpu" "$RESET"
     else
-            printf '%sМодель: %s %s (%s)%s\n' "$CYAN" "$_model" "${_fw:-не определена}" "$_cpu" "$RESET"
+            printf '%s%sМодель: %s %s%s %s%s(%s)%s\n' "$RESET" "$WHITE" "$_model" "$BRIGHT_CYAN" "${_fw:-не определена}" "$RESET" "$GREEN" "$_cpu" "$RESET"
     fi
     render_component_statuses
     line
@@ -6012,31 +9758,32 @@ render_menu_content() {
         menu_item 2  'XKeen UI — zxc-rv'
         menu_item 3  'XKeen UI — umarcheh001'
         menu_item 4  'nfqws2'
-        menu_item 5  'nfqws-web-keenetic'
-        menu_item 6  'nfqws2-ui'
+        menu_item 5  'nfqws v1 — step-by-step install / update'
+        menu_item 6  'nfqws-web-keenetic'
+        menu_item 7  'nfqws2-ui'
         say ""
         say "${PURPLE}[::]  Manual installation profiles:${RESET}"
-        menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen at startup)'
-        menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen at startup)'
-        menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
-        menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        menu_item 8  'XKeen Auto (Mihomo + GeoIPSet + XKeen at startup)'
+        menu_item 9  'XKeen Auto (Xray + GeoIPSet + XKeen at startup)'
+        menu_item 10  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        menu_item 11 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         say ""
         say "${PURPLE}[::]  nfqws2 management:${RESET}"
-        menu_item 11 'nfqws2 management'
+        menu_item 12 'nfqws2 management'
         say ""
         say "${PURPLE}[::]  Utilities / diagnostics:${RESET}"
-        menu_item 12 'Diagnostics'
-        menu_item 13 'TG WS Proxy Rust'
-        menu_item 14 'KeenKit'
-        menu_item 15 'awg-manager'
-        menu_item 16 'Other utilities'
+        menu_item 13 'Diagnostics'
+        menu_item 14 'TG WS Proxy Rust'
+        menu_item 15 'KeenKit'
+        menu_item 16 'awg-manager'
+        menu_item 17 'Other utilities'
         say ""
         say "${PURPLE}[::]  Maintenance / settings:${RESET}"
-        menu_item 17 'Сменить язык: RU / EN (change language)'
-        menu_item 18 'Remove components'
-        menu_item 19 'Remove Xmenu'
-        menu_item 20 'Update Xmenu'
-        menu_item 21 'OPKG settings / Entware mirrors'
+        menu_item 18 'Сменить язык: RU / EN (change language)'
+        menu_item 19 'Remove components'
+        menu_item 20 'Remove Xmenu'
+        menu_item 21 'Update Xmenu'
+        menu_item 22 'OPKG settings / Entware mirrors'
         menu_item 0  'Exit'
     else
         say "${PURPLE}[::]  Установка / обновление:${RESET}"
@@ -6044,31 +9791,32 @@ render_menu_content() {
         menu_item 2  'XKeen UI — zxc-rv'
         menu_item 3  'XKeen UI — umarcheh001'
         menu_item 4  'nfqws2'
-        menu_item 5  'nfqws-web-keenetic'
-        menu_item 6  'nfqws2-ui'
+        menu_item 5  'nfqws v1 — поэтапная установка / обновление'
+        menu_item 6  'nfqws-web-keenetic'
+        menu_item 7  'nfqws2-ui'
         say ""
         say "${PURPLE}[::]  Ручные настройки установки:${RESET}"
-        menu_item 7  'XKeen Auto (Mihomo + GeoIPSet + XKeen в автозагрузке)'
-        menu_item 8  'XKeen Auto (Xray + GeoIPSet + XKeen в автозагрузке)'
-        menu_item 9  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
-        menu_item 10 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        menu_item 8  'XKeen Auto (Mihomo + GeoIPSet + XKeen в автозагрузке)'
+        menu_item 9  'XKeen Auto (Xray + GeoIPSet + XKeen в автозагрузке)'
+        menu_item 10  'Mihomo + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
+        menu_item 11 'Xray + GeoIPSet + XKeen Auto + XKeen UI + nfqws2 + nfqws-web-keenetic'
         say ""
         say "${PURPLE}[::]  Управление nfqws2:${RESET}"
-        menu_item 11 'Управление nfqws2'
+        menu_item 12 'Управление nfqws2'
         say ""
         say "${PURPLE}[::]  Утилиты и диагностика:${RESET}"
-        menu_item 12 'Диагностика'
-        menu_item 13 'TG WS Proxy Rust'
-        menu_item 14 'KeenKit'
-        menu_item 15 'awg-manager'
-        menu_item 16 'Прочие утилиты'
+        menu_item 13 'Диагностика'
+        menu_item 14 'TG WS Proxy Rust'
+        menu_item 15 'KeenKit'
+        menu_item 16 'awg-manager'
+        menu_item 17 'Прочие утилиты'
         say ""
         say "${PURPLE}[::]  Обслуживание и настройки:${RESET}"
-        menu_item 17 'Сменить язык: RU / EN (change language)'
-        menu_item 18 'Удаление компонентов'
-        menu_item 19 'Удалить Xmenu'
-        menu_item 20 'Обновить Xmenu'
-        menu_item 21 'Настройки OPKG / зеркала Entware'
+        menu_item 18 'Сменить язык: RU / EN (change language)'
+        menu_item 19 'Удаление компонентов'
+        menu_item 20 'Удалить Xmenu'
+        menu_item 21 'Обновить Xmenu'
+        menu_item 22 'Настройки OPKG / зеркала Entware'
         menu_item 0  'Выход'
     fi
     line
@@ -6554,7 +10302,12 @@ main() {
     configure_locale
     require_root || return 1
     case "${1:-menu}" in
-        site-check|diagnose-site) xmenu_site_check "${2:-}"; return $? ;;
+        site-check|diagnose-site)
+            shift
+            if [ "${1:-}" = --direct ]; then XMENU_SITE_DIRECT=1; shift; fi
+            xmenu_site_batch "$@"; return $? ;;
+        dns-check) shift; xmenu_dns_diagnose "$@"; return $? ;;
+        server-check) shift; xmenu_server_diagnose "$@"; return $? ;;
         discord-fix-rules) xmenu_discord_rules_apply; return $? ;;
         discord-fix-unrules) xmenu_discord_rules_remove; return $? ;;
         discord-fix-status) xmenu_discord_status; return $? ;;
@@ -6605,9 +10358,10 @@ main() {
             ensure_network || return 1
             install_xkeen_ui_umarcheh001
             return $? ;;
-        install-nfqws2|install-nf-web|install-nf-web2|install-dpi-detector)
+        install-nfqws|install-nfqws2|install-nf-web|install-nf-web2|install-dpi-detector)
             [ "$1" = install-nf-web2 ] || ensure_network || return 1
             case "$1" in
+                install-nfqws) install_nfqws1 ;;
                 install-nfqws2) install_nfqws2 ;;
                 install-nf-web) install_nf_web ;;
                 install-nf-web2) install_nf_web2 ;;
@@ -6662,7 +10416,7 @@ main() {
             return 0
         fi
         case "$_choice" in
-            1|2|3|4|5|6|7|8|9|10|12|13|14|15|16|18|20) invalidate_component_status_cache ;;
+            1|2|3|4|5|6|7|8|9|10|11|13|14|15|16|17|19|21) invalidate_component_status_cache ;;
         esac
         case "$_choice" in
             s|S)
@@ -6683,23 +10437,24 @@ main() {
             2) ensure_network && install_xkeen_ui; pause ;;
             3) ensure_network && install_xkeen_ui_umarcheh001; pause ;;
             4) ensure_network && install_nfqws2; pause ;;
-            5) ensure_network && install_nf_web; pause ;;
-            6) install_nf_web2; pause ;;
-            7) install_xkeen_core_profile mihomo; invalidate_core_version_cache; pause ;;
-            8) install_xkeen_core_profile xray; invalidate_core_version_cache; pause ;;
-            9) install_manual_bundle_profile mihomo; invalidate_core_version_cache; pause ;;
-            10) install_manual_bundle_profile xray; invalidate_core_version_cache; pause ;;
-            11) xmenu_nf_manage_menu ;;
-            12) xmenu_diagnostics_menu ;;
-            13) install_tg_ws_proxy_rust; pause ;;
-            14) install_keenkit; pause ;;
-            15) install_awg_manager; pause ;;
-            16) xmenu_other_utilities_menu ;;
-            17) change_ui_language; pause ;;
-            18) remove_components_menu; invalidate_core_version_cache ;;
-            19) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
-            20) update_xmenu_script || pause ;;
-            21) opkg_settings_menu ;;
+            5) install_nfqws1; pause ;;
+            6) ensure_network && install_nf_web; pause ;;
+            7) install_nf_web2; pause ;;
+            8) install_xkeen_core_profile mihomo; invalidate_core_version_cache; pause ;;
+            9) install_xkeen_core_profile xray; invalidate_core_version_cache; pause ;;
+            10) install_manual_bundle_profile mihomo; invalidate_core_version_cache; pause ;;
+            11) install_manual_bundle_profile xray; invalidate_core_version_cache; pause ;;
+            12) xmenu_nf_manage_menu ;;
+            13) xmenu_diagnostics_menu ;;
+            14) install_tg_ws_proxy_rust; pause ;;
+            15) install_keenkit; pause ;;
+            16) install_awg_manager; pause ;;
+            17) xmenu_other_utilities_menu ;;
+            18) change_ui_language; pause ;;
+            19) remove_components_menu; invalidate_core_version_cache ;;
+            20) remove_menu; _remove_rc=$?; [ "${XMENU_REMOVED:-0}" = 1 ] && { cleanup; return 0; } ;;
+            21) update_xmenu_script || pause ;;
+            22) opkg_settings_menu ;;
             0) cleanup; return 0 ;;
             *) say "${RED}Неверный пункт.${RESET}"; sleep 1 ;;
         esac
