@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 import signal
+import shutil
 import socket
 import socketserver
 import ssl
@@ -168,6 +169,11 @@ class BypassTests(unittest.TestCase):
             self.assertFalse(engine.route('1.1.1.1')['ok'])
 
     def test_sigterm_removes_temporary_rules(self):
+        if not shutil.which('iptables-save'):
+            self.skipTest('Router integration requires iptables and active NFQUEUE rules')
+        snapshot = subprocess.run(['iptables-save', '-t', 'mangle'], capture_output=True)
+        if snapshot.returncode or b'-j NFQUEUE' not in snapshot.stdout:
+            self.skipTest('No active router NFQUEUE interception to bypass')
         child = subprocess.Popen([sys.executable, '-c', code, '1.1.1.1', '--ports', '22', '--hops', '15', '--no-external', '--json'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             tag = 'xmenu-server-' + str(child.pid) + '-'
