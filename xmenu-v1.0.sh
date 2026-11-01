@@ -3276,6 +3276,7 @@ import argparse
 import base64
 import concurrent.futures
 import ctypes
+import ctypes.util
 import errno
 import ipaddress
 import json
@@ -3537,7 +3538,13 @@ def curl_library():
     with _curl_lock:
         if _curl is not None:
             return _curl
-        library = ctypes.CDLL('/opt/lib/libcurl.so.4')
+        try:
+            library = ctypes.CDLL('/opt/lib/libcurl.so.4')
+        except OSError:
+            try:
+                library = ctypes.CDLL(ctypes.util.find_library('curl') or 'libcurl.so.4')
+            except OSError as exc:
+                raise OSError('Нужен libcurl: opkg install curl libcurl ca-bundle') from exc
         library.curl_global_init.argtypes = [ctypes.c_long]
         library.curl_global_init.restype = ctypes.c_int
         if library.curl_global_init(3):

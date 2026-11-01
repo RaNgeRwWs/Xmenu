@@ -461,6 +461,20 @@ class TableTests(unittest.TestCase):
         self.assertEqual(engine.assess(data, {'example.com': {'8.8.8.8'}}), (0, 0, []))
 
 
+class CurlLibraryTests(unittest.TestCase):
+    def test_system_library_fallback(self):
+        library = mock.MagicMock()
+        library.curl_global_init.return_value = 0
+        with mock.patch.object(engine, '_curl', None), mock.patch.object(engine.ctypes, 'CDLL', side_effect=[OSError('no Entware'), library]) as loader, mock.patch.object(engine.ctypes.util, 'find_library', return_value='libcurl.so.4'):
+            self.assertIs(engine.curl_library(), library)
+            self.assertEqual(loader.call_args_list, [mock.call('/opt/lib/libcurl.so.4'), mock.call('libcurl.so.4')])
+
+    def test_missing_library_has_install_hint(self):
+        with mock.patch.object(engine, '_curl', None), mock.patch.object(engine.ctypes, 'CDLL', side_effect=OSError('missing')), mock.patch.object(engine.ctypes.util, 'find_library', return_value=None):
+            with self.assertRaisesRegex(OSError, 'opkg install'):
+                engine.curl_library()
+
+
 class LocalTLSTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
